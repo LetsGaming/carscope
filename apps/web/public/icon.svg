@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="carscope">
+  <rect width="64" height="64" rx="12" fill="#1b1a17"/>
+  <!-- Car in profile: kept to two masses so it still reads at 16px. -->
+  <path d="M12 38.5h40a2 2 0 0 0 2-2v-4.2a5 5 0 0 0-3.7-4.8l-6.1-1.6-5.2-5.4a6 6 0 0 0-4.3-1.8H23.6a6 6 0 0 0-4.6 2.1l-4.8 5.7-2.6 1.2A4 4 0 0 0 10 31.3v5.2a2 2 0 0 0 2 2Z" fill="#ecebe8"/>
+  <circle cx="21" cy="39" r="5.6" fill="#ecebe8"/>
+  <circle cx="21" cy="39" r="2.4" fill="#1b1a17"/>
+  <circle cx="45" cy="39" r="5.6" fill="#ecebe8"/>
+  <circle cx="45" cy="39" r="2.4" fill="#1b1a17"/>
+  <!-- The road as a price line: what the app actually watches. -->
+  <path d="M13 55h8l7-6 5 4 11-7" fill="none" stroke="#8a2f26" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

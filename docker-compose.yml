@@ -1,0 +1,55 @@
+# Settings live in .env, not here. Copy .env.example to .env and edit that; the
+# values below are only the ones that describe the container itself, which the
+# host's own .env has no business deciding.
+#
+# The solver is optional and not started by default:
+#
+#   docker compose up -d                      carscope alone
+#   docker compose --profile solver up -d     carscope and a bundled Byparr
+#
+# Pointing COLLECT_SOLVER_URL at a Byparr or FlareSolverr that already runs
+# elsewhere, an LXC or another host, works without the profile. See .env.example.
+#
+# Requires Compose v2.24 or newer for the optional env_file.
+services:
+  carscope:
+    build: .
+    image: carscope:latest
+    restart: unless-stopped
+    # Chromium spawns child processes; init reaps them instead of leaking zombies.
+    init: true
+    # Chromium is launched with --disable-dev-shm-usage, but headroom still helps.
+    shm_size: ${CARSCOPE_SHM_SIZE:-512mb}
+    ports:
+      - "${CARSCOPE_PORT:-8080}:8080"
+    volumes:
+      - ${CARSCOPE_DATA:-./data}:/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Paths and ports inside the container. These override .env on purpose:
+      # DATA_DIR=./data is right when running from a checkout and wrong here.
+      DATA_DIR: /data
+      WEB_ROOT: /app/web
+      PORT: "8080"
+      HOST: 0.0.0.0
+      COLLECT_BROWSER_PROFILE_DIR: /data/browser-profile
+    # Lets COLLECT_SOLVER_URL name host.docker.internal when the solver runs on
+    # the Docker host itself. A solver on another machine is reached by address.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Byparr solves Cloudflare's interstitial and hands back the page. Only started
+  # with --profile solver, and carscope does not depend on it: without a solver
+  # the affected sources fall back to the browser.
+  byparr:
+    profiles: ["solver"]
+    image: ${BYPARR_IMAGE:-ghcr.io/thephaseless/byparr:latest}
+    restart: unless-stopped
+    init: true
+    shm_size: ${BYPARR_SHM_SIZE:-512mb}
+    # Not published by default: only carscope talks to it. Set BYPARR_PORT to
+    # reach it from the host, for reading its log or pointing another tool at it.
+    ports:
+      - "${BYPARR_PORT:-127.0.0.1:8191}:8191"

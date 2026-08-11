@@ -1,0 +1,14 @@
+{
+  "name": "@carscope/collector",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters": "./src/adapters/index.ts"
+  },
+  "dependencies": {
+    "@carscope/core": "*",
+    "playwright": "^1.62.1"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+# Runtime state. A warmed browser session is moved with `npm run session`,
+# never committed: it holds live cookies.
+data/
+.env
+apps/web/dist/

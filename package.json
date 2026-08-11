@@ -1,0 +1,32 @@
+{
+  "name": "carscope",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc && vue-tsc --noEmit -p apps/web/tsconfig.json",
+    "test": "node --test --experimental-strip-types \"tests/**/*.test.ts\"",
+    "dev": "npm-run-all --parallel dev:api dev:web",
+    "dev:api": "node --watch --experimental-strip-types apps/api/src/server.ts",
+    "dev:web": "npm -w @carscope/web run dev",
+    "build:web": "npm -w @carscope/web run build",
+    "seed": "node --experimental-strip-types apps/api/src/db/seed.ts",
+    "start": "node --experimental-strip-types apps/api/src/server.ts",
+    "capture": "node --experimental-strip-types apps/api/src/tools/capture.ts",
+    "explain": "node --experimental-strip-types apps/api/src/tools/explain.ts",
+    "warmup": "node --experimental-strip-types apps/api/src/tools/warmup.ts",
+    "session": "node --experimental-strip-types apps/api/src/tools/session.ts",
+    "fingerprint": "node --experimental-strip-types apps/api/src/tools/fingerprint.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3",
+    "npm-run-all": "^4.1.5"
+  }
+}

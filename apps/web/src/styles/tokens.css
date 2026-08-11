@@ -1,0 +1,87 @@
+:root {
+  --bg:       #ecebe8;
+  --surface:  #ffffff;
+  --sunk:     #e2e0dc;
+  --ink:      #1b1a17;
+  --ink-2:    #56534d;
+  --ink-3:    #8a857e;
+  --line:     #1b1a1718;
+  --line-2:   #1b1a172e;
+  --accent:   #8a2f26;
+  --accent-2: #a83a30;
+  --under:    #35704f;
+  --over:     #a4620f;
+  --on-accent:#ffffff;
+
+  /* Scrims over photography. The ink at three weights, so an overlay is never
+     a raw hex repeated per component. */
+  --scrim:        #1b1a17a8;
+  --scrim-strong: #1b1a17d8;
+  --scrim-soft:   #1b1a17c4;
+  --on-scrim:     #ffffff;
+
+  /* Placeholder illustration palette, picked per vehicle until a photo is
+     cached. Values live here so no component carries its own colour array. */
+  --tone-1-back: #2f3a44; --tone-1-fore: #5b6b78;
+  --tone-2-back: #4a3d38; --tone-2-fore: #7d6a5e;
+  --tone-3-back: #33453c; --tone-3-fore: #5f7a6c;
+  --tone-4-back: #453040; --tone-4-fore: #75566c;
+  --tone-5-back: #3b3f2e; --tone-5-fore: #6b7154;
+  --tone-6-back: #2c3b46; --tone-6-fore: #54707f;
+  --tone-shadow: #00000026;
+  --tone-body:   #12151a;
+
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --s1: .25rem; --s2: .5rem; --s3: .75rem; --s4: 1rem; --s5: 1.5rem; --s6: 2rem; --s7: 3rem;
+  --r: 4px;
+}
+
+[data-theme="dark"] {
+  --bg: #191816; --surface: #232120; --sunk: #131211;
+  --ink: #eae7e1; --ink-2: #a9a49c; --ink-3: #7b766e;
+  --line: #eae7e11a; --line-2: #eae7e130;
+  --accent: #d4655a; --accent-2: #e07b70;
+  --under: #63b189; --over: #d9a253; --on-accent: #191816;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 0.9375rem/1.55 var(--ui);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select { font: inherit; color: inherit; }
+button { background: none; border: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: inherit; }
+
+.dim { color: var(--ink-2); }
+.faint { color: var(--ink-3); }
+.under { color: var(--under); }
+.over { color: var(--over); }
+
+.btn {
+  padding: 7px var(--s4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--bg);
+  color: var(--ink-2);
+}
+.btn:hover { color: var(--ink); border-color: var(--ink-3); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: var(--s5);
+}
+
+.empty { padding: var(--s7) var(--s5); color: var(--ink-3); max-width: 58ch; }

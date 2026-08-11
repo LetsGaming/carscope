@@ -1,0 +1,10 @@
+# Never bake secrets or a host's paths into the image; compose passes .env in.
+.env
+node_modules
+**/node_modules
+data
+dist
+**/dist
+.git
+*.tsbuildinfo
+tests/fixtures
