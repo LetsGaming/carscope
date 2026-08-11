@@ -1,10 +1,16 @@
 # Documentation
 
-How the code is meant to be written and extended. The [project README](../README.md)
-covers the other half: running it, configuring it, and what each portal does.
+Everything beyond the [project README](../README.md), which is deliberately short:
+what carscope is, how it works in a paragraph, and how to start it.
+
+The first three documents are the operator's and the user's view. The rest are
+for anyone changing the code.
 
 | Document | Covers |
 |---|---|
+| [operating.md](operating.md) | Running it, every setting, debugging a run, troubleshooting |
+| [collecting.md](collecting.md) | How pages are fetched, what each portal yields, adding a source |
+| [domain.md](domain.md) | Searching, deduplication, delisting, days on market, what the statistics claim |
 | [architecture.md](architecture.md) | The four modules, which way dependencies point, and the seams between them |
 | [conventions.md](conventions.md) | Types, casts, magic values, errors, naming, comments |
 | [data-layer.md](data-layer.md) | Schema, repositories, row mapping, migrations, SQLite settings |
