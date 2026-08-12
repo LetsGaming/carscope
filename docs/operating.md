@@ -101,6 +101,7 @@ changes that.
 | `ENV_FILE` | `.env` | Read settings from somewhere else |
 | `LOG_LEVEL` | `info` | Pino level; `silent` in tests |
 | `WEB_ROOT` | unset | Serve a built SPA from this path |
+| `HTTPS` | `false` | Behind TLS; enables headers browsers ignore on plain HTTP |
 | `CORS_ORIGIN` | unset | Comma-separated allowed origins |
 | `COLLECT_ENABLED_SOURCES` | the three DE portals | Initial adapter selection |
 | `COLLECT_INTERVAL_MINUTES` | `360` | Scheduler tick basis |

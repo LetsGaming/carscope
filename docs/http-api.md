@@ -118,6 +118,10 @@ app with a different config.
   `frame-ancestors 'none'`. Images also allow `data:` and `https:`, because a
   listing may still hot-link a portal's photo. Vite emits no inline script, so
   none is allowed.
+- `upgrade-insecure-requests`, COOP and Origin-Agent-Cluster are only sent when
+  `HTTPS=true`. A browser ignores the last two on an untrustworthy origin and
+  logs an error, and the first makes a page served over HTTP request its own
+  assets over HTTPS, which fails.
 - CORS is registered only when `CORS_ORIGIN` names origins.
 - The logger redacts `cookie` and `authorization`.
 - Every query is parameterised.

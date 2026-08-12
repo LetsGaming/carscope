@@ -65,8 +65,19 @@ export async function build(opts: BuildOptions): Promise<FastifyInstance> {
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
+        // Helmet adds `upgrade-insecure-requests` by default, which tells the
+        // browser to fetch every subresource over HTTPS. carscope is normally
+        // reached over plain HTTP on a LAN, where that turns its own CSS, JS,
+        // manifest and icons into failed HTTPS requests and leaves a blank page.
+        // Setting it to null removes the directive; HTTPS=true restores it for
+        // an install behind a TLS proxy, where it is worth having.
+        ...(opts.config.https ? {} : { upgradeInsecureRequests: null }),
       },
     },
+    // Both are ignored by browsers on an untrustworthy origin and only produce
+    // console errors there, so they follow the same switch.
+    crossOriginOpenerPolicy: opts.config.https,
+    originAgentCluster: opts.config.https,
   });
   if (opts.config.corsOrigin.length > 0) {
     await app.register(cors, { origin: [...opts.config.corsOrigin] });

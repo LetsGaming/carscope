@@ -19,6 +19,8 @@ export interface Config {
   readonly host: string;
   readonly logLevel: string;
   readonly corsOrigin: readonly string[];
+  /** Reached over HTTPS, directly or through a TLS proxy. Decides strict headers. */
+  readonly https: boolean;
   readonly dataDir: string;
   readonly databaseFile: string;
   readonly webRoot: string | null;
@@ -114,6 +116,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: int(env["PORT"], 8080),
     host: optional(env["HOST"]) ?? "0.0.0.0",
     logLevel: optional(env["LOG_LEVEL"]) ?? "info",
+    https: env["HTTPS"] === "true",
     corsOrigin: list(env["CORS_ORIGIN"]),
     dataDir,
     databaseFile: optional(env["DATABASE_FILE"]) ?? join(dataDir, "carscope.sqlite"),

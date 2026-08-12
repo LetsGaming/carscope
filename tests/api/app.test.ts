@@ -5,7 +5,8 @@ import { build } from "../../apps/api/src/app.ts";
 import { loadConfig } from "../../apps/api/src/config.ts";
 import { finish } from "./helpers.ts";
 
-const config = loadConfig({ DATABASE_FILE: ":memory:", LOG_LEVEL: "silent", COLLECT_ENABLED_SOURCES: "mock" });
+const BASE_ENV = { DATABASE_FILE: ":memory:", LOG_LEVEL: "silent", COLLECT_ENABLED_SOURCES: "mock" };
+const config = loadConfig(BASE_ENV);
 
 test("full slice: create a search, collect, then read market and results", async (t) => {
   const app = await build({ config, withScheduler: false });
@@ -141,3 +142,28 @@ test("collecting with no content type at all succeeds", async (t) => {
   const res = await app.inject({ method: "POST", url: `/api/searches/${id}/collect` });
   assert.equal(res.statusCode, 202);
 });
+
+test("plain HTTP is not told to upgrade its own assets", async (t) => {
+  // Helmet adds upgrade-insecure-requests by default. carscope is normally
+  // reached over HTTP on a LAN, where that turns its own CSS, JS and manifest
+  // into failed HTTPS requests and leaves a blank page.
+  const app = await build({ config: loadConfig(BASE_ENV), withScheduler: false });
+  t.after(() => app.close());
+
+  const res = await app.inject({ url: "/api/health" });
+  assert.doesNotMatch(String(res.headers["content-security-policy"]), /upgrade-insecure-requests/);
+  assert.equal(res.headers["cross-origin-opener-policy"], undefined, "ignored on an untrustworthy origin");
+});
+
+test("behind TLS the strict headers come back", async (t) => {
+  const app = await build({
+    config: loadConfig({ ...BASE_ENV, HTTPS: "true" }),
+    withScheduler: false,
+  });
+  t.after(() => app.close());
+
+  const res = await app.inject({ url: "/api/health" });
+  assert.match(String(res.headers["content-security-policy"]), /upgrade-insecure-requests/);
+  assert.equal(res.headers["cross-origin-opener-policy"], "same-origin");
+});
+

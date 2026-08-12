@@ -4,7 +4,7 @@
 Jest, no Vitest, no transform step.
 
 ```
-npm test                          # 201 tests
+npm test                          # 203 tests
 npm run typecheck                 # tsc + vue-tsc
 npm -w @carscope/web run build    # vue-tsc + vite build
 ```
