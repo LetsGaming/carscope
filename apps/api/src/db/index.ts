@@ -54,8 +54,9 @@ function prepareDirectory(dir: string): void {
       : "this process";
     throw new Error(
       `the data directory ${dir} is not writable by ${who}. `
-      + "In Docker this usually means the mounted directory belongs to another user: "
-      + "create it before starting, or set CARSCOPE_UID and CARSCOPE_GID to its owner.",
+      + "In Docker the entrypoint hands it over on start, so this means it was "
+      + "bypassed: either the service sets `user:`, or the daemon refused the "
+      + "chown. Set CARSCOPE_UID and CARSCOPE_GID to the owner of the directory.",
       { cause },
     );
   }

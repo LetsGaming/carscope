@@ -24,13 +24,6 @@ services:
       - "${CARSCOPE_PORT:-8080}:8080"
     volumes:
       - ${CARSCOPE_DATA:-./data}:/data
-    # The container writes to /data as this user. Docker creates a missing bind
-    # mount owned by root, and the image's own chown is hidden the moment the
-    # mount covers it, so the process could not open its own database. Matching
-    # the host user that owns the directory is what makes a bind mount work;
-    # 1000:1000 is the first non-root account on a typical host. Override with
-    # CARSCOPE_UID and CARSCOPE_GID, or `id -u`:`id -g` if it differs.
-    user: "${CARSCOPE_UID:-1000}:${CARSCOPE_GID:-1000}"
     env_file:
       - path: .env
         required: false
@@ -42,6 +35,12 @@ services:
       PORT: "8080"
       HOST: 0.0.0.0
       COLLECT_BROWSER_PROFILE_DIR: /data/browser-profile
+      # Who the server runs as, and who /data is handed to on start. The
+      # entrypoint uses root for that one chown and drops it immediately, so a
+      # bind mount works whoever created it. Set these to `id -u` and `id -g`
+      # when the files should belong to your own account.
+      CARSCOPE_UID: "${CARSCOPE_UID:-1000}"
+      CARSCOPE_GID: "${CARSCOPE_GID:-1000}"
     # Lets COLLECT_SOLVER_URL name host.docker.internal when the solver runs on
     # the Docker host itself. A solver on another machine is reached by address.
     extra_hosts:

@@ -54,21 +54,19 @@ processes are reaped rather than accumulating as zombies.
 
 ### The data directory
 
-The container writes the database, the photos and the browser profile to `/data`,
-which is a bind mount from the host. Docker creates a missing bind mount owned by
-root, and the container does not run as root, so a first start against a
-directory that does not exist yet fails with `unable to open database file`.
-Either create it first:
+The database, the photos and the browser profile live in `/data`, a bind mount
+from the host. Nothing has to be prepared: the entrypoint starts as root, hands
+that directory to the account the server runs as, and drops root before the
+server starts. A directory created by Docker, left behind by an earlier run, or
+made by hand all work the same way.
 
-```
-mkdir -p data
-docker compose up -d
-```
+The files end up owned by uid 1000. Set `CARSCOPE_UID` and `CARSCOPE_GID` in
+`.env` to `id -u` and `id -g` if they should belong to your own account instead.
 
-or set `CARSCOPE_UID` and `CARSCOPE_GID` in `.env` to the owner of the directory
-you are mounting, which is what `id -u` and `id -g` report for your own account.
-The server names the directory and the user it is running as when this happens,
-rather than leaving a SQLite error to be interpreted.
+Setting `user:` on the service in `docker-compose.yml` disables the handover,
+because the entrypoint then never has the privilege to chown anything. That is
+supported, and the server says which directory it cannot write to if the
+ownership does not line up.
 
 ### The solver is not started by default
 
