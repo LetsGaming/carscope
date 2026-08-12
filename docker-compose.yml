@@ -24,6 +24,13 @@ services:
       - "${CARSCOPE_PORT:-8080}:8080"
     volumes:
       - ${CARSCOPE_DATA:-./data}:/data
+    # The container writes to /data as this user. Docker creates a missing bind
+    # mount owned by root, and the image's own chown is hidden the moment the
+    # mount covers it, so the process could not open its own database. Matching
+    # the host user that owns the directory is what makes a bind mount work;
+    # 1000:1000 is the first non-root account on a typical host. Override with
+    # CARSCOPE_UID and CARSCOPE_GID, or `id -u`:`id -g` if it differs.
+    user: "${CARSCOPE_UID:-1000}:${CARSCOPE_GID:-1000}"
     env_file:
       - path: .env
         required: false

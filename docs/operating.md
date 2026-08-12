@@ -52,6 +52,24 @@ API, so only port 8080 is exposed, and the database and photos live in the
 that volume land on the host. Compose sets `init: true` so Chromium's child
 processes are reaped rather than accumulating as zombies.
 
+### The data directory
+
+The container writes the database, the photos and the browser profile to `/data`,
+which is a bind mount from the host. Docker creates a missing bind mount owned by
+root, and the container does not run as root, so a first start against a
+directory that does not exist yet fails with `unable to open database file`.
+Either create it first:
+
+```
+mkdir -p data
+docker compose up -d
+```
+
+or set `CARSCOPE_UID` and `CARSCOPE_GID` in `.env` to the owner of the directory
+you are mounting, which is what `id -u` and `id -g` report for your own account.
+The server names the directory and the user it is running as when this happens,
+rather than leaving a SQLite error to be interpreted.
+
 ### The solver is not started by default
 
 ```

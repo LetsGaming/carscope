@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { loadConfig } from "../../apps/api/src/config.ts";
+import { openDatabase } from "../../apps/api/src/db/index.ts";
 
 test("an empty setting means unset, not configured-with-nothing", () => {
   // `.env.example` lists optional keys with nothing after the `=`, to document
@@ -33,3 +37,29 @@ test("a real setting is still honoured, and trimmed", () => {
   assert.equal(c.collect.browserCdp, "http://127.0.0.1:9222");
   assert.equal(c.dataDir, "/srv/carscope");
 });
+
+test("an unwritable data directory says so, instead of failing as SQLite", (t) => {
+  // SQLite reports it as "unable to open database file", which reads like a
+  // corrupt database. In a container it is almost always a bind mount Docker
+  // created as root while the process runs as someone else.
+  const dir = mkdtempSync(join(tmpdir(), "carscope-"));
+  t.after(() => { chmodSync(dir, 0o755); rmSync(dir, { recursive: true, force: true }); });
+  chmodSync(dir, 0o555);
+
+  if (process.getuid?.() === 0) return; // root writes anywhere; nothing to prove.
+
+  assert.throws(
+    () => openDatabase(join(dir, "carscope.sqlite")),
+    /not writable by uid \d+.*CARSCOPE_UID/s,
+  );
+});
+
+test("a writable directory is created on demand, however deep", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "carscope-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const db = openDatabase(join(dir, "nested", "deeper", "carscope.sqlite"));
+  t.after(() => db.close());
+  assert.ok(db.prepare("SELECT name FROM schema_migrations").all().length > 0);
+});
+

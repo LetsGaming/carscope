@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, mkdirSync } from "node:fs";
+import { accessSync, constants, readdirSync, readFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,12 +24,45 @@ const PRAGMAS = [
 ] as const;
 
 export function openDatabase(file: string): Db {
-  if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
+  if (file !== ":memory:") prepareDirectory(dirname(file));
   const db = new DatabaseSync(file);
   for (const pragma of PRAGMAS) db.exec(pragma);
   migrate(db);
   return db;
 }
+
+/**
+ * SQLite reports a directory it cannot write to as `unable to open database
+ * file`, which reads like a corrupt or missing database and says nothing about
+ * the cause. In a container it usually is a permission problem: Docker creates a
+ * missing bind mount owned by root, the process runs as someone else, and the
+ * image's own chown is hidden the moment the mount covers it. Checking here
+ * turns an eight-line stack trace and a restart loop into one sentence naming
+ * the directory and the user.
+ */
+function prepareDirectory(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (cause) {
+    throw new Error(`cannot create the data directory ${dir}: ${reason(cause)}`, { cause });
+  }
+  try {
+    accessSync(dir, constants.W_OK | constants.X_OK);
+  } catch (cause) {
+    const who = typeof process.getuid === "function"
+      ? `uid ${String(process.getuid())}`
+      : "this process";
+    throw new Error(
+      `the data directory ${dir} is not writable by ${who}. `
+      + "In Docker this usually means the mounted directory belongs to another user: "
+      + "create it before starting, or set CARSCOPE_UID and CARSCOPE_GID to its owner.",
+      { cause },
+    );
+  }
+}
+
+const reason = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : String(cause);
 
 /** node:sqlite has no transaction helper, so wrap one rather than repeating BEGIN/COMMIT. */
 export function transaction<T>(db: Db, work: () => T): T {
