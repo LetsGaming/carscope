@@ -8,7 +8,7 @@ import {
 } from "@carscope/core";
 import { readFileSync } from "node:fs";
 import {
-  ALL_ADAPTERS, browserTransport, collect, customAdapter, HostThrottle, HttpClient,
+  ALL_ADAPTERS, browserTransport, ClearanceStore, collect, customAdapter, HostThrottle, HttpClient,
   isDue, PhotoStore, PlaywrightBrowser, RUN_STATUS, Solver, solverTransport, withLoopback,
   type BrowserFetch, type CollectionRun, type CustomSource,
 } from "@carscope/collector";
@@ -183,16 +183,15 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
   const solver = cfg.solverUrl === null ? null : new Solver({
     endpoint: cfg.solverUrl,
     timeoutMs: cfg.solverTimeoutMs,
-    useSession: cfg.solverSession,
-    // Whether the solver keeps a session decides how long every page takes, so
-    // the answer belongs in our log rather than only in the solver's.
-    onSession: (available, reason) => {
-      if (available) app.log.info({ reason }, "solver session established");
-      else app.log.warn({ reason }, "solver runs without a session");
-    },
   });
+  // Byparr keeps no session; the clearance it returns is reused here instead, so
+  // a solved host is fetched plainly until its clearance ages out.
+  const clearance = solver === null ? null : new ClearanceStore(cfg.solverClearanceTtlMs);
   if (solver !== null) {
-    app.log.info({ endpoint: cfg.solverUrl, sources: cfg.solverSources }, "challenge solver configured");
+    app.log.info(
+      { endpoint: cfg.solverUrl, sources: cfg.solverSources, clearanceTtlMs: cfg.solverClearanceTtlMs },
+      "challenge solver configured",
+    );
   }
 
   const http = new HttpClient(new HostThrottle(cfg.minHostIntervalMs), {
@@ -200,15 +199,23 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
     userAgent: cfg.userAgent,
     transport: cfg.browser === BROWSER_MODE.always && viaBrowser !== undefined ? viaBrowser : plain,
     ...(viaBrowser === undefined ? {} : { browserTransport: viaBrowser }),
-    ...(solver === null ? {} : {
+    ...(solver === null || clearance === null ? {} : {
+      clearance,
       solverTransport: withLoopback(solverTransport(solver, {
+        clearance,
         ...(cfg.browserDebug
           ? { debugDir: join(opts.config.dataDir, "debug"), keepArtifacts: cfg.keepArtifacts }
           : {}),
         // Which branch decided a solver page is a refusal, without needing the
         // page itself: the status it claimed, what it was served as, and why.
         onVerdict: (v) => {
-          if (v.servedStatus === v.reportedStatus && v.reportedStatus >= 400) {
+          if (v.garbled === true) {
+            app.log.warn({
+              url: v.url,
+              reportedStatus: v.reportedStatus,
+              bytes: v.bytes,
+            }, "solver returned a corrupted page; treated as unavailable");
+          } else if (v.servedStatus === v.reportedStatus && v.reportedStatus >= 400) {
             app.log.warn({
               url: v.url,
               reportedStatus: v.reportedStatus,
@@ -349,6 +356,5 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
   app.addHook("onClose", async () => {
     await pending;
     await browser?.close();
-    await solver?.close();
   });
 }, { name: "collector", dependencies: ["storage"] });

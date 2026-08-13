@@ -50,7 +50,8 @@ export interface Config {
     readonly solverUrl: string | null;
     readonly solverTimeoutMs: number;
     readonly solverSources: readonly string[];
-    readonly solverSession: boolean;
+    /** How long a solved host's clearance is replayed before it is solved again. */
+    readonly solverClearanceTtlMs: number;
     readonly maxDetails: number;
     readonly assetIntervalMs: number;
     readonly concurrency: number;
@@ -154,7 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       solverUrl: optional(env["COLLECT_SOLVER_URL"]),
       solverTimeoutMs: int(env["COLLECT_SOLVER_TIMEOUT_MS"], 60_000),
       solverSources: list(env["COLLECT_SOLVER_SOURCES"]),
-      solverSession: env["COLLECT_SOLVER_SESSION"] !== "false",
+      solverClearanceTtlMs: int(env["COLLECT_SOLVER_CLEARANCE_TTL_MS"], 30 * 60_000),
       maxDetails: int(env["COLLECT_MAX_DETAILS"], 0),
       assetIntervalMs: int(env["COLLECT_ASSET_INTERVAL_MS"], 150),
       concurrency: int(env["COLLECT_CONCURRENCY"], 3),

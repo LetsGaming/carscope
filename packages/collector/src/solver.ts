@@ -1,37 +1,35 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { artifactDir, artifactName, pruneArtifacts } from "./artifacts.ts";
-import { BLOCKED_STATUS, looksLikeChallenge, type Transport } from "./http.ts";
+import type { ClearanceCookie, ClearanceWriter } from "./clearance.ts";
+import { BLOCKED_STATUS, looksBinary, looksLikeChallenge, type Transport } from "./http.ts";
 
 export interface SolverOptions {
   /** FlareSolverr-compatible endpoint, e.g. http://127.0.0.1:8191/v1 */
   readonly endpoint: string;
   readonly timeoutMs: number;
-  /** Reuse one browser session across requests instead of solving each time. */
-  readonly useSession?: boolean;
-  /**
-   * Called once with the outcome of the session attempt. Whether sessions are
-   * available decides how long every later page takes, and without this the
-   * answer was only visible in the solver's own log.
-   */
-  readonly onSession?: (available: boolean, reason: string) => void;
 }
 
 interface SolverSolution {
   readonly status: number | null;
   readonly response: string | null;
+  /** Cookies the challenge issued, kept so the clearance can be replayed. */
+  readonly cookies: readonly ClearanceCookie[];
+  /** The agent the solver drove; `cf_clearance` is bound to it. */
+  readonly userAgent: string | null;
 }
 
 interface SolverReply {
   readonly status: string | null;
   readonly message: string | null;
   readonly solution: SolverSolution | null;
-  readonly session: string | null;
 }
 
 export interface SolverPage {
   readonly status: number;
   readonly body: string;
+  readonly cookies: readonly ClearanceCookie[];
+  readonly userAgent: string | null;
 }
 
 /**
@@ -47,10 +45,11 @@ function toPage(reply: SolverReply): SolverPage {
   return {
     status: reply.solution?.status ?? NO_STATUS,
     body: reply.solution?.response ?? "",
+    cookies: reply.solution?.cookies ?? [],
+    userAgent: reply.solution?.userAgent ?? null,
   };
 }
 
-const SESSION_PREFIX = "carscope";
 const OK = "ok";
 /** No status from the solver is not a real HTTP status; the client maps it to a failure. */
 const NO_STATUS = 0;
@@ -63,26 +62,50 @@ const asNumber = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
 /**
+ * The cookies Byparr returns are Playwright cookies with more fields than a
+ * replay needs. Only name, value and domain are read, and only entries that
+ * carry all three: a cookie without a domain cannot be scoped to a host safely.
+ */
+function toCookies(value: unknown): ClearanceCookie[] {
+  if (!Array.isArray(value)) return [];
+  const cookies: ClearanceCookie[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const name = asString(entry["name"]);
+    const cookieValue = asString(entry["value"]);
+    const domain = asString(entry["domain"]);
+    if (name === null || cookieValue === null || domain === null || domain === "") continue;
+    cookies.push({ name, value: cookieValue, domain });
+  }
+  return cookies;
+}
+
+/**
  * The solver is a separate service that can be any version, so its answer is
  * read field by field rather than asserted into the shape we hope for. A reply
  * that does not fit reads as a solver that could not fetch the page.
  */
 function toReply(payload: unknown): SolverReply {
-  if (!isRecord(payload)) return { status: null, message: null, solution: null, session: null };
+  if (!isRecord(payload)) return { status: null, message: null, solution: null };
   const solution = payload["solution"];
   return {
     status: asString(payload["status"]),
     message: asString(payload["message"]),
-    session: asString(payload["session"]),
     solution: isRecord(solution)
-      ? { status: asNumber(solution["status"]), response: asString(solution["response"]) }
+      ? {
+        status: asNumber(solution["status"]),
+        response: asString(solution["response"]),
+        cookies: toCookies(solution["cookies"]),
+        userAgent: asString(solution["userAgent"]),
+      }
       : null,
   };
 }
 
 /**
  * Hands a request to Byparr or FlareSolverr, which drives its own browser
- * through the challenge and returns the page behind it.
+ * through the challenge and returns the page behind it — together with the
+ * cookies and user agent that got past it.
  *
  * Cloudflare's interstitial is a different problem from Akamai's scoring: it can
  * be passed, it just has to be passed by something that looks like a person
@@ -90,12 +113,15 @@ function toReply(payload: unknown): SolverReply {
  * where it would be an arms race, and behind an interface that is a transport
  * like any other — so failures stay typed and a solver that is down reads as a
  * source that is down, not as a source with no listings.
+ *
+ * Byparr is stateless: it takes no cookies in and keeps no session between
+ * calls (`cmd` is accepted only for FlareSolverr compatibility and ignored). The
+ * reuse that makes it worth its cost therefore happens on our side, from the
+ * clearance it returns — see the clearance store — not through a session here.
  */
 export class Solver {
   readonly #options: SolverOptions;
   readonly #fetch: typeof fetch;
-  #session: string | null = null;
-  #sessionAttempted = false;
 
   constructor(options: SolverOptions, fetchImpl: typeof fetch = fetch) {
     this.#options = options;
@@ -114,69 +140,13 @@ export class Solver {
     return toReply(await res.json());
   }
 
-  /**
-   * One session is reused where the solver has them: solving the challenge again
-   * per page is the slow part.
-   *
-   * Not every FlareSolverr-compatible solver does. Byparr documents `cmd` as
-   * being accepted for compatibility and ignored, so it reads this as an
-   * ordinary fetch. Its `url` defaults to the bare string `https://`, which is
-   * not navigable, so a `sessions.create` sent without one failed on every run
-   * and left a Playwright stack trace in its log. Sending the page we were about
-   * to request anyway means such a solver gets a real URL and simply warms up.
-   *
-   * The session is recorded only when the solver names it back. Falling back to
-   * the id we proposed meant carscope believed in a session that was never
-   * created, and attached it to every later request.
-   */
-  async #probe(url: string): Promise<SolverPage | null> {
-    if (this.#options.useSession !== true || this.#sessionAttempted) return null;
-    this.#sessionAttempted = true;
-
-    try {
-      const id = `${SESSION_PREFIX}-${String(Date.now())}`;
-      const reply = await this.#command({ cmd: "sessions.create", session: id, url });
-
-      if (reply.status === OK && reply.session !== null) {
-        this.#session = reply.session;
-        this.#options.onSession?.(true, "solver created a session");
-        return null;
-      }
-
-      this.#options.onSession?.(
-        false,
-        "solver does not support sessions; every page solves its own challenge",
-      );
-      // A solver that ignores `cmd` has just fetched the page. Asking again
-      // would hit the portal twice for one search, three seconds apart, which
-      // is the pattern bot protection is watching for.
-      return reply.status === OK && reply.solution !== null ? toPage(reply) : null;
-    } catch (e) {
-      this.#session = null;
-      this.#options.onSession?.(false, e instanceof Error ? e.message : "session request failed");
-      return null;
-    }
-  }
-
   async get(url: string): Promise<SolverPage> {
-    const probed = await this.#probe(url);
-    if (probed !== null) return probed;
-
-    const session = this.#session;
     const reply = await this.#command({
       cmd: "request.get",
       url,
       maxTimeout: this.#options.timeoutMs,
-      ...(session === null ? {} : { session }),
     });
     return toPage(reply);
-  }
-
-  async close(): Promise<void> {
-    const session = this.#session;
-    this.#session = null;
-    if (session === null) return;
-    await this.#command({ cmd: "sessions.destroy", session }).catch(() => null);
   }
 }
 
@@ -192,7 +162,7 @@ const BLOCK_PAGE_MAX_BYTES = 20_000;
 
 /**
  * Byparr reports the status of the *first* navigation and only rewrites it to
- * 200 when it recognised the interstitial by page title. Cloudflare's managed
+ * 200 when it recognised the interstitial and solved it. Cloudflare's managed
  * challenge answers 403 and then clears itself, so a 403 arrives attached to
  * the page we asked for, and reading the status alone threw away a full results
  * page as "the portal refused the request".
@@ -214,8 +184,11 @@ export interface SolverTransportOptions {
   /** Where to write the page the solver returned, as the browser transport does. */
   readonly debugDir?: string;
   readonly keepArtifacts?: number;
+  /** Banks the clearance from a solved page so later requests can skip the solver. */
+  readonly clearance?: ClearanceWriter;
   /** Called when a page is judged, so the reason reaches the log. */
   readonly onVerdict?: (verdict: SolverVerdict) => void;
+  readonly now?: () => number;
 }
 
 export interface SolverVerdict {
@@ -226,13 +199,38 @@ export interface SolverVerdict {
   readonly servedStatus: number;
   readonly bytes: number;
   readonly challengeMarker: boolean;
+  /** Set when the body was not usable text, so the reason is not read as content. */
+  readonly garbled?: boolean;
 }
+
+/** The solver answered, but the body is not decodable text — treated as a failure. */
+const SOLVER_GARBLED_CODE = 598;
+const SOLVER_GARBLED_MESSAGE = "solver returned a corrupted page (body was not decodable text)";
 
 /** Adapts a solver to the transport the HTTP client already speaks. */
 export function solverTransport(solver: Solver, options: SolverTransportOptions = {}): Transport {
+  const now = options.now ?? Date.now;
   return async (url) => {
     try {
       const page = await solver.get(url);
+
+      // Byparr requests an uncompressed body but re-serves the fetched response,
+      // so a portal that ignores that and answers compressed leaves the browser
+      // reading compressed bytes as text. That page is neither listings nor a
+      // challenge; passing it on would feed the parser noise and put binary in
+      // the run note. It reads as a solver that could not return the page.
+      if (looksBinary(page.body)) {
+        options.onVerdict?.({
+          url,
+          reportedStatus: page.status,
+          servedStatus: SOLVER_GARBLED_CODE,
+          bytes: page.body.length,
+          challengeMarker: false,
+          garbled: true,
+        });
+        return new Response(SOLVER_GARBLED_MESSAGE, { status: SOLVER_UNAVAILABLE_CODE });
+      }
+
       const status = statusFor(page);
 
       // A solver page is the one thing that used to leave no trace anywhere: the
@@ -246,6 +244,18 @@ export function solverTransport(solver: Solver, options: SolverTransportOptions 
         bytes: page.body.length,
         challengeMarker: looksLikeChallenge(page.body),
       });
+
+      // Bank the clearance only from a page that came back clean: the cookies and
+      // agent that just passed the challenge are what a later plain fetch replays
+      // instead of paying for the browser again.
+      if (status === OK_STATUS && page.userAgent !== null) {
+        options.clearance?.put(new URL(url).host, {
+          cookies: page.cookies,
+          userAgent: page.userAgent,
+          obtainedAtMs: now(),
+        });
+      }
+
       if (options.debugDir !== undefined) {
         await writeSolverDebug(options.debugDir, url, page.body, options.keepArtifacts);
       }

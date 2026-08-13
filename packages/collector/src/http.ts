@@ -1,4 +1,5 @@
 import { failure, FAILURE, err, ok, type Result } from "@carscope/core";
+import type { ClearanceReader } from "./clearance.ts";
 
 export type Transport = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -11,6 +12,12 @@ export interface FetchOptions {
   readonly browserTransport?: Transport;
   /** Used when a request asks for a challenge solver. */
   readonly solverTransport?: Transport;
+  /**
+   * Clearances a past solve produced. Consulted before a solver request so a
+   * host that has already been solved is fetched plainly, with the cookies and
+   * agent that cleared it, instead of paying for the solver's browser again.
+   */
+  readonly clearance?: ClearanceReader;
 }
 
 export interface RequestOptions {
@@ -40,6 +47,29 @@ const MARKER_SCAN_CHARS = 4_000;
 export function looksLikeChallenge(body: string): boolean {
   const lower = body.slice(0, MARKER_SCAN_CHARS).toLowerCase();
   return CHALLENGE_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/** Share of scanned characters that must be undecodable before a body is binary. */
+const BINARY_CHAR_RATIO = 0.1;
+
+/**
+ * Whether a body is undecodable bytes rather than text. The solver can hand back
+ * a still-compressed response — its own words describe re-serving the fetched
+ * bytes after stripping the encoding header — which arrives as control
+ * characters and U+FFFD replacements, not markup. Markup is effectively all
+ * printable, so a meaningful share of undecodable characters in the scanned head
+ * is the tell, and it is measured without assuming any particular encoding.
+ */
+export function looksBinary(body: string): boolean {
+  const head = body.slice(0, MARKER_SCAN_CHARS);
+  if (head.length === 0) return false;
+  let undecodable = 0;
+  for (const char of head) {
+    const code = char.codePointAt(0) ?? 0;
+    const control = code < 0x09 || (code > 0x0d && code < 0x20) || code === 0x7f;
+    if (control || code === 0xfffd) undecodable += 1;
+  }
+  return undecodable / head.length > BINARY_CHAR_RATIO;
 }
 
 /** Serialises requests per host so one source can never burst against a portal. */
@@ -134,6 +164,17 @@ export class HttpClient {
       ));
     }
 
+    // A clearance an earlier solve won lets this request skip the solver's
+    // browser: the cookies and agent Cloudflare already cleared, replayed over
+    // plain fetch, are what the solver would otherwise spend a browser to earn
+    // again. Tried only where a solver is in play, and only as an opener — a
+    // pass the portal no longer honours falls through to a fresh solve, so it is
+    // never worse than solving outright.
+    if (viaSolver !== undefined) {
+      const cleared = await this.#viaClearance(url, options, accept, host);
+      if (cleared !== null) return cleared;
+    }
+
     // The solver goes first where one is configured, because it is the thing
     // that gets past an interstitial. It is not a replacement for our browser:
     // the two present differently to bot protection, and a portal that refuses
@@ -152,6 +193,38 @@ export class HttpClient {
       `${host} refused both the solver and the browser`,
       second.error.status,
     ));
+  }
+
+  /**
+   * Tries a held clearance over plain fetch. Returns the response only when it
+   * succeeds — the point is to avoid the browser, so a page that comes back is
+   * used directly. A stale pass answers with the challenge again, which reads as
+   * blocked; that is the signal to discard it and let the caller solve afresh,
+   * so this returns null and the request proceeds as if there had been no pass.
+   */
+  async #viaClearance(
+    url: string,
+    options: RequestOptions,
+    accept: string,
+    host: string,
+  ): Promise<Result<Response> | null> {
+    const clearance = this.#defaults.clearance;
+    if (clearance === undefined) return null;
+    const pass = clearance.pass(host);
+    if (pass === null) return null;
+
+    // The agent has to match the cookies: `cf_clearance` is bound to the agent
+    // that earned it, and options.headers is merged last so it wins over the
+    // client default.
+    const replay: RequestOptions = {
+      ...options,
+      headers: { ...options.headers, cookie: pass.cookie, "user-agent": pass.userAgent },
+    };
+    const attempt = await this.#attempt(url, replay, accept, this.#defaults.transport ?? fetch, host);
+    if (attempt.ok) return attempt;
+
+    clearance.invalidate(host);
+    return null;
   }
 
   async #attempt(

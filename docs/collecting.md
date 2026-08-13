@@ -88,18 +88,28 @@ COLLECT_SOLVER_URL=http://127.0.0.1:8191/v1
 COLLECT_SOLVER_SOURCES=autouncle
 ```
 
-The solver drives its own browser, so for those sources it replaces ours. One
-session is created and reused where the solver has sessions, because solving the
-challenge again for every page is the slow part, and handed back on shutdown.
+The solver drives its own browser through the challenge, which is the slow part,
+so its result is reused rather than re-earned page by page. What it returns is
+not only the page: it hands back the cookies the challenge issued — a Cloudflare
+`cf_clearance` among them — and the user agent they were issued to. Those are
+banked per host, and the next page from that host is fetched plainly, carrying
+the same cookies and agent. Cloudflare already cleared that combination, so the
+plain fetch is let through and the browser is not paid for again. One solve then
+serves many pages, which is the point of running a solver at all; discarding the
+cookies, as this once did, left it doing a full browser solve for every page.
 
-Not every FlareSolverr-compatible solver does. Byparr accepts `cmd` for
-compatibility and ignores it, so it reads the session probe as an ordinary fetch
-and never names a session. carscope then runs sessionless against it and logs
-`solver runs without a session` once, with the reason. The probe carries the page
-that was about to be requested anyway, for two reasons: Byparr's own `url`
-default is the bare string `https://`, which its browser cannot navigate to, and
-a solver that answers the probe with the page has already done the work, so that
-answer is used rather than asking the portal for the same URL a second time.
+The clearance is bound to the agent that earned it and to the IP that solved, so
+both have to match on the replay — Byparr and carscope sharing a public IP, the
+usual homelab case, is what makes it work. A clearance is replayed for
+`COLLECT_SOLVER_CLEARANCE_TTL_MS` (default 30 min) and then re-solved, and a
+replay the portal no longer honours is dropped on the spot and the host solved
+afresh. The reuse is therefore never worse than solving every time, only faster
+while it holds.
+
+Byparr keeps no session of its own: it accepts `cmd` for FlareSolverr
+compatibility and ignores it, and takes no cookies in, so the reuse has to happen
+on our side from the clearance it returns. There is nothing to create or hand
+back, and the earlier session probe that existed to warm one is gone.
 
 **The solver does not replace the browser.** Where a source is listed in
 `COLLECT_SOLVER_SOURCES`, the solver is tried first, because getting past an
@@ -133,6 +143,15 @@ body decides instead: a page under 20 kB, or one still carrying a challenge
 marker, stays blocked; a substantial page that no longer looks like a challenge
 is treated as the page it is. `docker compose --profile solver` runs Byparr
 alongside; one running elsewhere is used by address instead.
+
+**A solved page can also arrive as compressed bytes.** Byparr asks the portal
+for an uncompressed body and strips the encoding header, but a portal that
+ignores that and answers compressed leaves the body as bytes read as text —
+control characters and replacement marks, not markup. That is neither listings
+nor a challenge; handing it to the parser would read as a page with nothing on
+it and put binary in the run note. A body that is mostly undecodable is treated
+as the solver having failed to return the page, with the same *source
+unavailable* result as a solver that is down.
 
 It is wired in as a transport behind the same client as everything else, so a
 solver that is down reads as *that source* being unavailable, with the solver's

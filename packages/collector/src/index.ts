@@ -1,6 +1,7 @@
 export * from "./http.ts";
 export * from "./browser.ts";
 export * from "./artifacts.ts";
+export * from "./clearance.ts";
 export * from "./solver.ts";
 export * from "./html.ts";
 export * from "./filter.ts";

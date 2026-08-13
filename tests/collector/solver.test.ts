@@ -1,12 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FAILURE } from "@carscope/core";
-import { HostThrottle, HttpClient, type Transport } from "../../packages/collector/src/http.ts";
+import { HostThrottle, HttpClient, looksBinary, type Transport } from "../../packages/collector/src/http.ts";
+import { ClearanceStore } from "../../packages/collector/src/clearance.ts";
 import { Solver, solverTransport } from "../../packages/collector/src/solver.ts";
 
-interface Call { cmd: string; url?: string; session?: string }
+interface Call { cmd: string; url?: string; maxTimeout?: number }
+interface Cookie { name: string; value: string; domain: string }
 
-function fakeSolver(reply: (call: Call) => unknown, calls: Call[] = []) {
+/** A fake Byparr: records the commands it receives and replies per `reply`. */
+function fakeSolver(reply: (call: Call) => unknown) {
+  const calls: Call[] = [];
   const impl = (async (_endpoint: string, init?: RequestInit) => {
     const call = JSON.parse(String(init?.body)) as Call;
     calls.push(call);
@@ -15,28 +19,62 @@ function fakeSolver(reply: (call: Call) => unknown, calls: Call[] = []) {
     return new Response(JSON.stringify(body), { status: 200 });
   }) as unknown as typeof fetch;
 
-  return {
-    calls,
-    solver: new Solver({ endpoint: "http://solver.invalid/v1", timeoutMs: 1_000, useSession: true }, impl),
-  };
+  return { calls, solver: new Solver({ endpoint: "http://solver.invalid/v1", timeoutMs: 1_000 }, impl) };
 }
 
-const solved = (html: string) => (call: Call) =>
-  call.cmd === "sessions.create"
-    ? { status: "ok", session: "carscope-1" }
-    : { status: "ok", solution: { status: 200, response: html } };
+/** A solved-page reply, with the clearance (cookies + agent) Byparr returns. */
+const page = (
+  html: string,
+  opts: { status?: number; cookies?: Cookie[]; userAgent?: string } = {},
+) => (): unknown => ({
+  status: "ok",
+  solution: {
+    status: opts.status ?? 200,
+    response: html,
+    cookies: opts.cookies ?? [],
+    userAgent: opts.userAgent ?? "camoufox-UA",
+  },
+});
 
-const client = (solver: Solver): HttpClient =>
-  new HttpClient(new HostThrottle(0), {
+const listings = `<html><body>${"<article>Skyline</article>".repeat(2_000)}</body></html>`;
+
+interface PlainCall { url: string; cookie: string | null; userAgent: string | null }
+
+/**
+ * An HTTP client wired to the fake solver, recording the plain fetches the
+ * clearance replay makes. A store is shared between the solver transport (which
+ * banks a clearance) and the client (which replays it) when one is passed.
+ */
+function harness(opts: {
+  solver: Solver;
+  store?: ClearanceStore;
+  plain?: (call: PlainCall) => Response;
+}): { http: HttpClient; plainCalls: PlainCall[] } {
+  const plainCalls: PlainCall[] = [];
+  const plain: Transport = async (url, init) => {
+    const headers = new Headers(init?.headers as HeadersInit | undefined);
+    const call: PlainCall = {
+      url,
+      cookie: headers.get("cookie"),
+      userAgent: headers.get("user-agent"),
+    };
+    plainCalls.push(call);
+    return (opts.plain ?? (() => new Response("plain", { status: 200 })))(call);
+  };
+
+  const http = new HttpClient(new HostThrottle(0), {
     timeoutMs: 1_000,
-    userAgent: "test",
-    transport: async () => new Response("plain", { status: 200 }),
-    solverTransport: solverTransport(solver),
+    userAgent: "default-UA",
+    transport: plain,
+    solverTransport: solverTransport(opts.solver, opts.store ? { clearance: opts.store } : {}),
+    ...(opts.store ? { clearance: opts.store } : {}),
   });
+  return { http, plainCalls };
+}
 
 test("a request marked for the solver comes back with the page behind the challenge", async () => {
-  const { solver } = fakeSolver(solved("<html>echte Seite</html>"));
-  const http = client(solver);
+  const { solver } = fakeSolver(page("<html>echte Seite</html>"));
+  const { http } = harness({ solver });
 
   const plain = await http.getText("https://portal.invalid/a");
   assert.equal(plain.ok && plain.value, "plain");
@@ -46,155 +84,125 @@ test("a request marked for the solver comes back with the page behind the challe
   assert.equal(viaSolver.value, "<html>echte Seite</html>");
 });
 
-test("the challenge is solved once and the session reused", async () => {
-  const { solver, calls } = fakeSolver(solved("<html>ok</html>"));
-  const http = client(solver);
+test("a solved host is fetched plainly next time, with the cookies that cleared it", async () => {
+  const store = new ClearanceStore(60_000);
+  const { solver, calls } = fakeSolver(page(listings, {
+    cookies: [{ name: "cf_clearance", value: "abc", domain: ".portal.invalid" }],
+    userAgent: "camoufox-UA",
+  }));
+  const { http, plainCalls } = harness({ solver, store });
 
-  await http.getText("https://portal.invalid/1", { solver: true });
-  await http.getText("https://portal.invalid/2", { solver: true });
+  const first = await http.getText("https://portal.invalid/1", { solver: true, browser: true });
+  assert.ok(first.ok);
+  assert.equal(calls.filter((c) => c.cmd === "request.get").length, 1);
+  assert.equal(plainCalls.length, 0, "the first page is the solver's");
 
-  assert.equal(calls.filter((c) => c.cmd === "sessions.create").length, 1, "one session, not one per page");
-  assert.equal(calls.filter((c) => c.cmd === "request.get").length, 2);
-  assert.ok(calls.filter((c) => c.cmd === "request.get").every((c) => c.session === "carscope-1"));
+  const second = await http.getText("https://portal.invalid/2", { solver: true, browser: true });
+  assert.ok(second.ok);
+  assert.equal(calls.filter((c) => c.cmd === "request.get").length, 1, "the solver is not asked again");
+  assert.equal(plainCalls.length, 1, "the second page is a plain fetch");
+  assert.equal(plainCalls[0]?.cookie, "cf_clearance=abc");
+  assert.equal(plainCalls[0]?.userAgent, "camoufox-UA", "the agent the cookie is bound to, not our default");
+});
 
-  await solver.close();
-  assert.equal(calls.at(-1)?.cmd, "sessions.destroy", "and it is handed back");
+test("a clearance the portal no longer honours is dropped and the host re-solved", async () => {
+  const store = new ClearanceStore(60_000);
+  const { solver, calls } = fakeSolver(page(listings, {
+    cookies: [{ name: "cf_clearance", value: "abc", domain: ".portal.invalid" }],
+  }));
+  // The stale cookie draws the challenge again, which the portal answers 403.
+  const { http, plainCalls } = harness({ solver, store, plain: () => new Response("nope", { status: 403 }) });
+
+  await http.getText("https://portal.invalid/1", { solver: true, browser: true });
+  const again = await http.getText("https://portal.invalid/2", { solver: true, browser: true });
+
+  assert.ok(again.ok, "the request falls through to a fresh solve");
+  assert.equal(plainCalls.length, 1, "the stale pass was tried once");
+  assert.equal(calls.filter((c) => c.cmd === "request.get").length, 2, "and the solver solved again");
+});
+
+test("a corrupted solver page reads as unavailable, not as content", async () => {
+  const garbled = `<html><head></head><body>${"\u0000\u0001\u0002\u0003\ufffd".repeat(400)}</body>`;
+  assert.ok(looksBinary(garbled), "the fixture is undecodable, as the fault produces");
+
+  const { solver } = fakeSolver(page(garbled));
+  const { http } = harness({ solver, store: new ClearanceStore(60_000) });
+
+  const res = await http.getText("https://portal.invalid/a", { solver: true });
+  assert.equal(res.ok, false, "the parser is never handed the bytes");
+  assert.equal(res.ok ? null : res.error.kind, FAILURE.http);
+  assert.match(res.ok ? "" : res.error.message, /corrupted/);
+});
+
+test("a clean page does not read as binary", () => {
+  assert.equal(looksBinary(listings), false);
+  assert.equal(looksBinary(""), false);
 });
 
 test("a solver that refuses says so instead of returning an empty page", async () => {
-  const { solver } = fakeSolver((call) =>
-    call.cmd === "sessions.create"
-      ? { status: "ok", session: "s" }
-      : { status: "error", message: "Challenge not solved after 60s" });
+  const { solver } = fakeSolver(() => ({ status: "error", message: "Challenge not solved after 60s" }));
 
-  const res = await client(solver).getText("https://portal.invalid/a", { solver: true });
+  const { http } = harness({ solver });
+  const res = await http.getText("https://portal.invalid/a", { solver: true });
   assert.equal(res.ok, false);
   assert.match(res.ok ? "" : res.error.message, /Challenge not solved/);
 });
 
 test("a solver that is down reads as the source being unavailable", async () => {
   const { solver } = fakeSolver(() => null);
-  const res = await client(solver).getText("https://portal.invalid/a", { solver: true });
+  const { http } = harness({ solver });
+  const res = await http.getText("https://portal.invalid/a", { solver: true });
   assert.equal(res.ok, false);
   assert.equal(res.ok ? null : res.error.kind, FAILURE.http);
   assert.match(res.ok ? "" : res.error.message, /Solver/);
 });
 
 test("a source not routed through the solver is untouched by it", async () => {
-  const { solver, calls } = fakeSolver(solved("<html>ok</html>"));
-  const res = await client(solver).getText("https://portal.invalid/a");
+  const { solver, calls } = fakeSolver(page("<html>ok</html>"));
+  const { http } = harness({ solver });
+  const res = await http.getText("https://portal.invalid/a");
   assert.ok(res.ok);
   assert.equal(res.value, "plain");
   assert.equal(calls.length, 0, "the solver is only used where it is asked for");
 });
 
-/**
- * Byparr documents `cmd` as accepted for FlareSolverr compatibility and ignored,
- * so it answers every call as a page fetch and never returns a session. Its
- * `url` defaults to the bare string "https://", which Playwright cannot
- * navigate to, so a probe sent without one failed on every run.
- */
-const sessionless = (call: Call) => {
-  void call;
-  return { status: "ok", solution: { status: 200, response: "<html>ok</html>" } };
-};
+test("the solver is asked with a real page request, not a bare scheme", async () => {
+  const { solver, calls } = fakeSolver(page("<html>ok</html>"));
+  await harness({ solver }).http.getText("https://portal.invalid/seite-1", { solver: true });
 
-test("the session probe asks for the page we wanted anyway, not a bare scheme", async () => {
-  const { solver, calls } = fakeSolver(sessionless);
-  await client(solver).getText("https://portal.invalid/seite-1", { solver: true });
-
-  const probe = calls[0];
-  assert.equal(probe?.cmd, "sessions.create");
-  assert.equal(probe?.url, "https://portal.invalid/seite-1", "a solver that ignores cmd can act on it");
-});
-
-test("a solver without sessions is used sessionless, not with an invented id", async () => {
-  // Falling back to the id we proposed made every later request carry a session
-  // the solver had no record of.
-  const { solver, calls } = fakeSolver(sessionless);
-  const http = client(solver);
-
-  await http.getText("https://portal.invalid/1", { solver: true });
-  await http.getText("https://portal.invalid/2", { solver: true });
-
-  const pages = calls.filter((c) => c.cmd === "request.get");
-  assert.ok(pages.every((c) => c.session === undefined), "no session is attached");
-
-  await solver.close();
-  assert.ok(
-    calls.every((c) => c.cmd !== "sessions.destroy"),
-    "and none is handed back, because none was created",
-  );
-});
-
-test("the probe's own page is used rather than asking the portal twice", async () => {
-  // A solver that ignores `cmd` answers the probe with the page. Requesting it
-  // again put two hits on the portal seconds apart, for one search.
-  const { solver, calls } = fakeSolver(sessionless);
-  const res = await client(solver).getText("https://portal.invalid/seite-1", { solver: true });
-
-  assert.ok(res.ok);
-  assert.equal(res.value, "<html>ok</html>", "the probe's page is what comes back");
-  assert.equal(calls.length, 1, "one call, not a probe and then a repeat");
-  assert.equal(calls.filter((c) => c.url === "https://portal.invalid/seite-1").length, 1);
+  assert.equal(calls.length, 1, "one call, no session dance");
+  assert.equal(calls[0]?.cmd, "request.get");
+  assert.equal(calls[0]?.url, "https://portal.invalid/seite-1");
 });
 
 /**
  * Byparr returns the status of the first navigation. Cloudflare answers 403 and
  * then clears itself, so a solved page arrives carrying a 403.
  */
-const solvedAfter403 = (body: string) => () => ({
-  status: "ok",
-  solution: { status: 403, response: body },
-});
-
 test("a page solved behind a 403 is the page, not a refusal", async () => {
-  const listings = `<html><body>${"<article>Skyline</article>".repeat(2_000)}</body></html>`;
-  const { solver } = fakeSolver(solvedAfter403(listings));
+  const { solver } = fakeSolver(page(listings, { status: 403 }));
 
-  const res = await client(solver).getText("https://portal.invalid/a", { solver: true });
+  const res = await harness({ solver }).http.getText("https://portal.invalid/a", { solver: true });
   assert.ok(res.ok, "the results page is not thrown away because of the interstitial's status");
   assert.equal(res.value, listings);
 });
 
 test("a genuine refusal behind a 403 still reads as blocked", async () => {
   const denial = "<html><body>Access denied. You do not have permission.</body></html>";
-  const { solver } = fakeSolver(solvedAfter403(denial));
+  const { solver } = fakeSolver(page(denial, { status: 403 }));
 
-  const res = await client(solver).getText("https://portal.invalid/a", { solver: true });
+  const res = await harness({ solver }).http.getText("https://portal.invalid/a", { solver: true });
   assert.equal(res.ok, false, "a short denial page keeps its status");
   assert.equal(res.ok ? null : res.error.kind, FAILURE.blocked);
 });
 
 test("a long page that is still the bot check reads as blocked", async () => {
   const challenge = `<html><head><title>Just a moment</title></head><body>datadome${"x".repeat(30_000)}</body></html>`;
-  const { solver } = fakeSolver(solvedAfter403(challenge));
+  const { solver } = fakeSolver(page(challenge, { status: 403 }));
 
-  const res = await client(solver).getText("https://portal.invalid/a", { solver: true });
+  const res = await harness({ solver }).http.getText("https://portal.invalid/a", { solver: true });
   assert.equal(res.ok, false);
   assert.equal(res.ok ? null : res.error.kind, FAILURE.blocked);
-});
-
-test("whether the solver keeps a session is reported once", async () => {
-  const notes: { available: boolean; reason: string }[] = [];
-  const calls: Call[] = [];
-  const impl = (async (_endpoint: string, init?: RequestInit) => {
-    calls.push(JSON.parse(String(init?.body)) as Call);
-    return new Response(JSON.stringify(sessionless(calls[calls.length - 1] as Call)), { status: 200 });
-  }) as unknown as typeof fetch;
-
-  const solver = new Solver({
-    endpoint: "http://solver.invalid/v1", timeoutMs: 1_000, useSession: true,
-    onSession: (available, reason) => notes.push({ available, reason }),
-  }, impl);
-  const http = client(solver);
-
-  await http.getText("https://portal.invalid/1", { solver: true });
-  await http.getText("https://portal.invalid/2", { solver: true });
-
-  assert.equal(notes.length, 1, "reported once, not per page");
-  assert.equal(notes[0]?.available, false);
-  assert.match(notes[0]?.reason ?? "", /session/i);
 });
 
 test("without a solver configured the request still goes out", async () => {

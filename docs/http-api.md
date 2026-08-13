@@ -126,8 +126,9 @@ app with a different config.
 - The logger redacts `cookie` and `authorization`.
 - Every query is parameterised.
 - Stored photos are raster only, decided by the file's leading bytes.
-- Shutdown closes the stream set, waits for a running job, closes the browser and
-  the solver session, then the database.
+- Shutdown closes the stream set, waits for a running job, closes the browser,
+  then the database. The solver holds nothing to close; its clearances are
+  in-memory and discarded with the process.
 
 There is no authentication. carscope is a single-user self-hosted tool and
 assumes a trusted network. Exposing it publicly needs an authenticating proxy in

@@ -131,7 +131,7 @@ changes that.
 | `COLLECT_SOLVER_URL` | unset | Byparr or FlareSolverr endpoint |
 | `COLLECT_SOLVER_SOURCES` | unset | Which sources go through it |
 | `COLLECT_SOLVER_TIMEOUT_MS` | `60000` | How long a challenge may take |
-| `COLLECT_SOLVER_SESSION` | `true` | Reuse one solved session |
+| `COLLECT_SOLVER_CLEARANCE_TTL_MS` | `1800000` | How long a solved host's cookies are replayed before re-solving |
 | `COLLECT_BROWSER_SETTLE_MS` | `1500` | Wait for client-side rendering |
 | `COLLECT_SOURCE_DEADLINE_MS` | `60000` | Hard stop for one source |
 | `COLLECT_PHOTO_BUDGET_MB` | `2000` | Photo store size before pruning |
