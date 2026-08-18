@@ -205,7 +205,7 @@ export interface SolverVerdict {
 
 /** The solver answered, but the body is not decodable text — treated as a failure. */
 const SOLVER_GARBLED_CODE = 598;
-const SOLVER_GARBLED_MESSAGE = "solver returned a corrupted page (body was not decodable text)";
+const SOLVER_GARBLED_MESSAGE = "solver returned an unreadable 200 page (portal likely served a compressed body)";
 
 /** Adapts a solver to the transport the HTTP client already speaks. */
 export function solverTransport(solver: Solver, options: SolverTransportOptions = {}): Transport {
@@ -213,25 +213,17 @@ export function solverTransport(solver: Solver, options: SolverTransportOptions 
   return async (url) => {
     try {
       const page = await solver.get(url);
-
-      // Byparr requests an uncompressed body but re-serves the fetched response,
-      // so a portal that ignores that and answers compressed leaves the browser
-      // reading compressed bytes as text. That page is neither listings nor a
-      // challenge; passing it on would feed the parser noise and put binary in
-      // the run note. It reads as a solver that could not return the page.
-      if (looksBinary(page.body)) {
-        options.onVerdict?.({
-          url,
-          reportedStatus: page.status,
-          servedStatus: SOLVER_GARBLED_CODE,
-          bytes: page.body.length,
-          challengeMarker: false,
-          garbled: true,
-        });
-        return new Response(SOLVER_GARBLED_MESSAGE, { status: SOLVER_UNAVAILABLE_CODE });
-      }
-
       const status = statusFor(page);
+
+      // Only a page that would be served as content has to be decodable text. A
+      // blocked or not-found status is the answer whatever its error page holds,
+      // so the body is judged for garble only when the status is a success. This
+      // is the one case worth catching: Byparr requests an uncompressed body but
+      // re-serves the fetched response, so a portal that answers compressed
+      // despite that leaves a 200 whose body is bytes, not markup, and feeding
+      // it to the parser would read as a page with no cars on it. A 403 or 404
+      // is reported as itself, not relabelled as corruption.
+      const garbled = status === OK_STATUS && looksBinary(page.body);
 
       // A solver page is the one thing that used to leave no trace anywhere: the
       // browser writes its markup to the debug directory and the solver wrote
@@ -240,10 +232,15 @@ export function solverTransport(solver: Solver, options: SolverTransportOptions 
       options.onVerdict?.({
         url,
         reportedStatus: page.status,
-        servedStatus: status,
+        servedStatus: garbled ? SOLVER_GARBLED_CODE : status,
         bytes: page.body.length,
         challengeMarker: looksLikeChallenge(page.body),
+        ...(garbled ? { garbled: true } : {}),
       });
+
+      if (garbled) {
+        return new Response(SOLVER_GARBLED_MESSAGE, { status: SOLVER_UNAVAILABLE_CODE });
+      }
 
       // Bank the clearance only from a page that came back clean: the cookies and
       // agent that just passed the challenge are what a later plain fetch replays

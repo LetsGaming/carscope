@@ -144,14 +144,18 @@ marker, stays blocked; a substantial page that no longer looks like a challenge
 is treated as the page it is. `docker compose --profile solver` runs Byparr
 alongside; one running elsewhere is used by address instead.
 
-**A solved page can also arrive as compressed bytes.** Byparr asks the portal
-for an uncompressed body and strips the encoding header, but a portal that
-ignores that and answers compressed leaves the body as bytes read as text —
-control characters and replacement marks, not markup. That is neither listings
-nor a challenge; handing it to the parser would read as a page with nothing on
-it and put binary in the run note. A body that is mostly undecodable is treated
-as the solver having failed to return the page, with the same *source
-unavailable* result as a solver that is down.
+**The status is read before the body.** A page the solver returns is judged by
+its status first: a 403 is reported as blocked and a 404 as *has no page for
+this search* — the portal saying it does not list that model in that market —
+whatever the bytes of the error page behind them. Only a 200, the one status
+whose body would be parsed as listings, has its body checked at all. There the
+one thing worth catching is a compressed body: Byparr asks the portal for an
+uncompressed response and strips the encoding header, but a portal that answers
+compressed regardless leaves a 200 whose body is bytes, not markup. That is
+treated as the solver having failed to return the page — the same *source
+unavailable* as a solver that is down — rather than fed to the parser as a page
+with no cars on it. A blocked or not-found status is never relabelled as
+corruption.
 
 It is wired in as a transport behind the same client as everything else, so a
 solver that is down reads as *that source* being unavailable, with the solver's

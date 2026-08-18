@@ -88,9 +88,9 @@ export class VehicleRepository {
         (SELECT COUNT(*) FROM photos p WHERE p.vehicle_id = v.id) AS photo_count,
         (SELECT p.local_path FROM photos p WHERE p.vehicle_id = v.id ORDER BY p.position LIMIT 1) AS thumb_path,
         (SELECT p.url FROM photos p WHERE p.vehicle_id = v.id ORDER BY p.position LIMIT 1) AS thumb_url,
-        -- The portal an advert sits on, falling back to the source that found it.
-        -- "autouncle" is where we looked, not where the car is.
-        (SELECT group_concat(DISTINCT COALESCE(l.origin, l.source_id))
+        -- The sources a car was found on: the portal we fetched from, not the
+        -- portal an aggregator says the advert originated on.
+        (SELECT group_concat(DISTINCT l.source_id)
          FROM listings l WHERE l.vehicle_id = v.id) AS sources,
         (SELECT l.url FROM listings l WHERE l.vehicle_id = v.id ORDER BY l.first_seen_at LIMIT 1) AS listing_url
       FROM vehicles v
@@ -268,16 +268,15 @@ export class VehicleRepository {
 
   upsertListing(vehicleId: string, raw: RawListing, adapter: SourceAdapter, now: string): void {
     this.#db.prepare(`
-      INSERT INTO listings (id, vehicle_id, source_id, origin, source_listing_id, url, title, first_seen_at, last_seen_at)
-      VALUES (?,?,?,?,?,?,?,?,?)
+      INSERT INTO listings (id, vehicle_id, source_id, source_listing_id, url, title, first_seen_at, last_seen_at)
+      VALUES (?,?,?,?,?,?,?,?)
       ON CONFLICT (source_id, source_listing_id)
       DO UPDATE SET
         last_seen_at = excluded.last_seen_at,
         delisted_at = NULL,
-        title = excluded.title,
-        origin = COALESCE(excluded.origin, listings.origin)
+        title = excluded.title
     `).run(
-      randomUUID(), vehicleId, adapter.id, raw.origin ?? null,
+      randomUUID(), vehicleId, adapter.id,
       raw.sourceListingId, raw.url, raw.title, now, now,
     );
   }

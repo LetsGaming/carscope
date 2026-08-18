@@ -121,17 +121,44 @@ test("a clearance the portal no longer honours is dropped and the host re-solved
   assert.equal(calls.filter((c) => c.cmd === "request.get").length, 2, "and the solver solved again");
 });
 
-test("a corrupted solver page reads as unavailable, not as content", async () => {
+test("an unreadable 200 page reads as unavailable, not as content", async () => {
   const garbled = `<html><head></head><body>${"\u0000\u0001\u0002\u0003\ufffd".repeat(400)}</body>`;
-  assert.ok(looksBinary(garbled), "the fixture is undecodable, as the fault produces");
+  assert.ok(looksBinary(garbled), "the fixture is undecodable, as the compression fault produces");
 
+  // Status 200: a page we would otherwise parse, so its body has to be text.
   const { solver } = fakeSolver(page(garbled));
   const { http } = harness({ solver, store: new ClearanceStore(60_000) });
 
   const res = await http.getText("https://portal.invalid/a", { solver: true });
   assert.equal(res.ok, false, "the parser is never handed the bytes");
   assert.equal(res.ok ? null : res.error.kind, FAILURE.http);
-  assert.match(res.ok ? "" : res.error.message, /corrupted/);
+  assert.match(res.ok ? "" : res.error.message, /unreadable/);
+});
+
+test("a 404 reads as not-found, even when its error page is unreadable bytes", async () => {
+  // The real case: the solver fetched the URL and the portal answered 404 for a
+  // model it does not list, with a body that happens to look binary. The status
+  // is the answer; the body must not relabel it as corruption.
+  const garbled404 = `<html><body>${"\u0000\u0001\u0002\ufffd".repeat(300)}</body></html>`;
+  assert.ok(looksBinary(garbled404));
+
+  const { solver } = fakeSolver(page(garbled404, { status: 404 }));
+  const res = await harness({ solver }).http.getText("https://portal.invalid/nope", { solver: true });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.ok ? null : res.error.kind, FAILURE.notFound, "reported as 404, not corruption");
+  assert.match(res.ok ? "" : res.error.message, /404/);
+});
+
+test("a 403 block page reads as blocked, not corruption, whatever its body", async () => {
+  // A short Cloudflare denial that also trips the binary heuristic still has to
+  // surface as the refusal it is, so the note says blocked rather than garbled.
+  const denial = `<html><body>${"\u0000\u0001\ufffd".repeat(200)}</body></html>`;
+  const { solver } = fakeSolver(page(denial, { status: 403 }));
+
+  const res = await harness({ solver }).http.getText("https://portal.invalid/blocked", { solver: true });
+  assert.equal(res.ok, false);
+  assert.equal(res.ok ? null : res.error.kind, FAILURE.blocked);
 });
 
 test("a clean page does not read as binary", () => {

@@ -1,5 +1,5 @@
 import {
-  CRITERION, CURRENCY, HOUR_MS, MARKET, ok, err, failure, FAILURE, toMarket,
+  CRITERION, CURRENCY, HOUR_MS, ok, err, failure, FAILURE, toMarket,
   type BodyStyle, type Criteria, type ListPage, type Market, type QueryContext,
   type RawListing, type RequestSpec, type Result, type SourceAdapter,
 } from "@carscope/core";
@@ -36,13 +36,16 @@ const FUEL: Readonly<Record<string, "petrol" | "diesel" | "electric" | "hybrid" 
 
 /**
  * AutoUncle is a meta-search that already aggregates the portals, including ones
- * that refuse to be read directly. Its result page is a Next.js App Router
- * document, and the listings arrive complete in the RSC flight payload — make,
- * model, year, mileage, power, body, gearbox, images, days on market, and the
- * name of the portal each one came from.
+ * that refuse to be read directly, so one request returns mobile.de, AutoScout24
+ * and Kleinanzeigen together. That is the whole reason this adapter exists.
  *
- * One request therefore returns mobile.de, AutoScout24 and Kleinanzeigen
- * together, which is the whole reason this adapter exists.
+ * The result page is a Next.js App Router document. It once carried the listings
+ * in the RSC flight payload, but that payload no longer holds them — the cards
+ * are only in the rendered DOM now — so this reads the DOM, which is the set of
+ * cars actually on the page. Each card is attributed to AutoUncle, the source it
+ * was fetched from, not to the portal the advert originated on: a listing's
+ * origin is a property of the advert, not the search, and tracking it added a
+ * cross-source concept no other adapter shared for no real benefit.
  */
 export const autoUncle: SourceAdapter = {
   id: "autouncle",
@@ -81,80 +84,86 @@ export const autoUncle: SourceAdapter = {
     return { url: q.size === 0 ? path : `${path}?${q.toString()}` };
   },
 
-  /**
-   * Reads the rendered cards, then enriches them from the flight payload.
-   *
-   * The payload has cleaner values, but it only carries what was streamed with
-   * the document: a card added during hydration appears on the page and in no
-   * chunk. Taking the DOM as the set of listings and the payload as extra detail
-   * means a card the browser shows can never be one we do not have.
-   */
   parseList(body: string, spec: RequestSpec): Result<ListPage> {
-    const origin = new URL(spec.url).origin;
-
-    const rendered = domListings(body, origin);
-    const payload = flightPayload(body);
-    const streamed = carObjects(payload).flatMap((car) => toRaw(car, origin));
-
-    const byId = new Map(rendered.map((l) => [l.sourceListingId, l]));
-    for (const l of streamed) {
-      const seen = byId.get(l.sourceListingId);
-      byId.set(l.sourceListingId, seen === undefined ? l : {
-        ...seen,
-        ...l,
-        photoUrls: l.photoUrls.length >= seen.photoUrls.length ? l.photoUrls : seen.photoUrls,
-        attributes: { ...seen.attributes, ...l.attributes },
-      });
-    }
-
-    const listings = [...byId.values()];
+    const listings = domListings(body, spec.url);
     if (listings.length === 0) {
       return err(failure(FAILURE.parse, "AutoUncle lieferte keine auswertbaren Inserate"));
     }
 
-    // No count is reported, because neither candidate measured what it claimed.
-    // The page's stated total counts the whole search, so comparing one page to
-    // it called normal pagination a loss. Counting rendered <article> elements
-    // instead counts the featured-cars carousel, which is advertising for other
-    // models and never was a result. Telling the two apart needs the structure
-    // around a card, not a pattern in the markup, and a wrong number sends
-    // someone looking for listings that were never missing.
-    return ok({ listings, hasMore: listings.length > 0 });
+    // One page is requested and it holds the whole result set for the searches
+    // this runs — a specific model in one market. Asking for a second page would
+    // fetch an empty one, and an empty page reads as a parse failure that marks
+    // the whole market degraded, so pagination is deliberately not followed.
+    return ok({ listings, hasMore: false });
   },
 };
 
 const CARD_LINK = /href="(\/[a-z]{2}\/d\/(\d+)[^"]*)"/;
 const SPEC_ITEM = /<li[^>]*>([^<]{2,40})<\/li>/g;
+const TITLE = /<h3[^>]*>([^<]+)<\/h3>/;
+/** The subtitle sits directly after the title; keying off that order avoids the hashed class name. */
+const VARIANT = /<h3[^>]*>[^<]*<\/h3>\s*<p[^>]*>([^<]*)<\/p>/;
+const IMAGE = /<img[^>]+src="(https:\/\/images\.autouncle\.com\/[^"]+)"/;
+const ALT = /<img[^>]+alt="([^"]*)"/;
+const PRICE = /([\d.]+)\s*(?:&nbsp;|\u00a0|\s)?€/;
+/**
+ * "PLZ Stadt, Region" or "PLZ, Region": the city sits between the postal code
+ * and the comma, and is absent when the code is followed straight by it (a
+ * listing that states only its federal state). Matched on the element so the
+ * city cannot absorb whatever text follows the card.
+ */
+const PLACE = />\s*(\d{4,5})(?:\s+([^,<]{2,40}?))?,\s*[A-Za-zÄÖÜäöü][^<]*</;
+const LAYTIME = /Tage inseriert\s+(\d+)/;
 
-/** The cards as the browser renders them, which is the set actually on screen. */
-export function domListings(html: string, origin: string): RawListing[] {
+/**
+ * The cards as the browser renders them, which is the set actually on the page.
+ * Make and model come from the search URL rather than the card, because every
+ * card on the page is that make and model and the URL states it exactly, where
+ * the card's title is free text.
+ */
+export function domListings(html: string, searchUrl: string): RawListing[] {
+  const origin = originOf(searchUrl);
+  const { make, model } = searchMakeModel(searchUrl);
+  const market = marketFromUrl(searchUrl);
+  // A single-word model that the title must contain separates real results from
+  // the featured-cars strip, which advertises other models. Multi-word models
+  // are left unguarded rather than risk dropping a card that spells the model
+  // differently than the URL slug does.
+  const guard = model !== null && model.length >= 3 && !/[\s-]/.test(model)
+    ? model.toLowerCase() : null;
+
   const found: RawListing[] = [];
-
   for (const article of blocksBy(html, /<article\b/g)) {
     const link = CARD_LINK.exec(article);
     if (link === null) continue;
 
-    const text = visibleText(article);
-    const price = germanNumber(/([\d.]+)\s*(?:&nbsp;|\u00a0|\s)?€/.exec(text)?.[1]);
+    const flat = visibleText(article);
+    const price = germanNumber(PRICE.exec(flat)?.[1]);
     if (price === null) continue;
+
+    const title = decodeEntities(TITLE.exec(article)?.[1] ?? "").trim();
+    const alt = decodeEntities(ALT.exec(article)?.[1] ?? "");
+    if (guard !== null && !`${title} ${alt}`.toLowerCase().includes(guard)) continue;
 
     const specs = [...article.matchAll(SPEC_ITEM)].map((m) => decodeEntities(m[1] ?? "").trim());
     const find = (test: RegExp): string | null => specs.find((v) => test.test(v)) ?? null;
 
-    const image = /<img[^>]+src="(https:\/\/images\.autouncle\.com\/[^"]+)"/.exec(article)?.[1];
-    // Matched on the element, not the flattened text, so the city does not
-    // absorb whatever button follows it.
-    const place = />\s*(\d{4,5}),\s*([^<]{2,40})</.exec(article);
-    const laytime = /Tage inseriert\s+(\d+)/.exec(text)?.[1];
+    const image = IMAGE.exec(article)?.[1];
+    const variant = decodeEntities(VARIANT.exec(article)?.[1] ?? "").trim();
+    const place = PLACE.exec(article);
+    const laytime = LAYTIME.exec(flat)?.[1];
 
     found.push({
       sourceListingId: link[2] ?? "",
       url: origin + (link[1] ?? ""),
-      title: decodeEntities(/<h3[^>]*>([^<]+)<\/h3>/.exec(article)?.[1] ?? "").trim(),
+      title,
       price,
       currency: CURRENCY.eur,
       photoUrls: image === undefined ? [] : [image],
       attributes: {
+        ...(make === null ? {} : { make }),
+        ...(model === null ? {} : { model }),
+        ...(variant === "" ? {} : { variant }),
         mileageKm: germanNumber(find(/\bkm\b/)),
         powerW: powerLabelToWatt(find(/\b(PS|kW)\b/)),
         firstRegistration: monthYear(find(/(?:19|20)\d{2}/)),
@@ -166,125 +175,54 @@ export function domListings(html: string, origin: string): RawListing[] {
         postalCode: place?.[1] ?? null,
         city: place?.[2]?.trim().replace(/\s+/g, " ") ?? null,
         firstListedAt: daysAgo(laytime === undefined ? null : Number.parseInt(laytime, 10)),
+        ...(market === null ? {} : { market }),
       },
     });
   }
   return found;
 }
 
-const CHUNK = /self\.__next_f\.push\(\[1,\s*"((?:[^"\\]|\\.)*)"\]\)/g;
-
-/** The flight payload arrives as a series of pushed string chunks. */
-export function flightPayload(html: string): string {
-  const parts: string[] = [];
-  for (const match of html.matchAll(CHUNK)) {
-    try {
-      parts.push(JSON.parse(`"${match[1] ?? ""}"`) as string);
-    } catch {
-      continue;
-    }
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
   }
-  return parts.join("");
 }
 
 /**
- * The payload is not valid JSON as a whole, so each listing is recovered by
- * brace-matching outwards from a key only listings carry.
+ * `buildQuery` builds `/{locale}/{listing-segment}/{Make}[/{Model}]`, so the
+ * make and model are the third and fourth path segments. Reading them back is
+ * exact, where parsing them out of a card's free-text title would not be.
  */
-export function carObjects(payload: string): Record<string, unknown>[] {
-  const found: Record<string, unknown>[] = [];
-
-  for (const match of payload.matchAll(/"vdpPath":/g)) {
-    const start = payload.lastIndexOf("{", match.index);
-    if (start === -1) continue;
-
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let i = start; i < payload.length; i += 1) {
-      const ch = payload[i];
-      if (escaped) { escaped = false; continue; }
-      if (ch === "\\") { escaped = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (ch === "{") depth += 1;
-      else if (ch === "}") {
-        depth -= 1;
-        if (depth !== 0) continue;
-        try {
-          const parsed: unknown = JSON.parse(payload.slice(start, i + 1));
-          if (isCar(parsed)) found.push(parsed);
-        } catch {
-          // A component prop that merely mentions the key; not a listing.
-        }
-        break;
+function searchMakeModel(url: string): { make: string | null; model: string | null } {
+  try {
+    const segs = new URL(url).pathname.split("/").filter(Boolean).map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
       }
-    }
+    });
+    return { make: segs[2] ?? null, model: segs[3] ?? null };
+  } catch {
+    return { make: null, model: null };
   }
-  return found;
 }
 
-/**
- * A listing is identified by having an id and a page of its own. Mileage and
- * year were the earlier test, which also discarded any listing the aggregator
- * had not resolved those for — a silent loss rather than an incomplete record.
- */
-function isCar(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  const car = value as Record<string, unknown>;
-  return typeof car["carId"] === "string" && typeof car["vdpPath"] === "string";
+function marketFromUrl(url: string): Market | null {
+  for (const [key, prefix] of Object.entries(HOST)) {
+    if (url.startsWith(prefix)) return toMarket(key) ?? null;
+  }
+  return null;
 }
 
 const capitalise = (value: string): string =>
   value.split(/[\s-]+/).map((w) => (w[0]?.toUpperCase() ?? "") + w.slice(1)).join("-");
 
-const text = (value: unknown): string | null =>
-  typeof value === "string" && value.trim() !== "" ? value.trim() : null;
-
-function toRaw(car: Record<string, unknown>, origin: string): RawListing[] {
-  const id = text(car["carId"]);
-  const path = text(car["vdpPath"]);
-  const price = germanNumber(text(car["price"]));
-  if (id === null || path === null || price === null) return [];
-
-  const history = (car["modalPriceHistoryValues"] ?? {}) as Record<string, unknown>;
-  // AutoUncle aggregates: each result is an advert on another portal, and which
-  // one is the answer to "where is this car".
-  const portal = text(car["sourceName"]);
-  const images = car["imageUrls"];
-  const place = text(car["location"])?.split(",") ?? [];
-
-  return [{
-    sourceListingId: id,
-    url: origin + path,
-    title: text(history["headline"]) ?? text(car["title"]) ?? id,
-    price,
-    currency: CURRENCY.eur,
-    photoUrls: Array.isArray(images) ? images.filter((i): i is string => typeof i === "string") : [],
-    ...(portal === null ? {} : { origin: portal }),
-    attributes: {
-      ...(text(car["brand"]) === null ? {} : { make: text(car["brand"]) as string }),
-      ...(text(car["carModel"]) === null ? {} : { model: text(car["carModel"]) as string }),
-      variant: text(car["equipmentVariant"]) ?? text(car["subtitle"]),
-      // "Mär 2000" is a month AutoUncle resolved; the bare year is the fallback.
-      firstRegistration: monthYear(text(history["displayableYear"]))
-        ?? (typeof car["year"] === "number" ? String(car["year"]) : null),
-      mileageKm: typeof car["km"] === "number" ? car["km"] : null,
-      powerW: powerLabelToWatt(text(history["displayableEnginePower"])),
-      gearbox: car["hasAutoGear"] === true ? "automatic" : car["hasAutoGear"] === false ? "manual" : null,
-      bodyStyle: BODY[(text(car["body"]) ?? "").toLowerCase()] ?? null,
-      sellerType: car["isPrivateCar"] === true ? "private" : "dealer",
-      firstListedAt: daysAgo(car["laytime"]),
-      postalCode: place[0]?.trim().match(/^\d{4,5}$/)?.[0] ?? null,
-      city: place[1]?.trim() ?? null,
-      market: toMarket(text(car["countryDefaultLocale"])?.toUpperCase()) ?? MARKET.de,
-    },
-  }];
-}
-
 /** `laytime` is days on market; the date it implies survives later runs. */
-function daysAgo(value: unknown): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+function daysAgo(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value) || value < 0) return null;
   const day = new Date();
   day.setDate(day.getDate() - Math.round(value));
   return day.toISOString().slice(0, 10);

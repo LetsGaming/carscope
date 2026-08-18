@@ -102,8 +102,6 @@ export interface Listing {
   readonly id: string;
   readonly vehicleId: string;
   readonly sourceId: string;
-  /** The portal the advert is on, when the source is an aggregator. */
-  readonly origin: string | null;
   readonly sourceListingId: string;
   readonly url: string;
   readonly title: string;

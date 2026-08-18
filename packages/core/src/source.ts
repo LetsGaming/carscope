@@ -20,12 +20,6 @@ export interface RawListing {
   readonly photoUrls: readonly string[];
   /** `market` is optional: adapters set it when the listing states a country. */
   readonly attributes: Partial<Omit<Vehicle, "id" | "identityKey" | "imageHash">>;
-  /**
-   * The portal the advert is on, where the source is an aggregator. A property
-   * of this advert, not of the car, so it sits beside the attributes rather than
-   * in them.
-   */
-  readonly origin?: string;
 }
 
 export interface ListPage {

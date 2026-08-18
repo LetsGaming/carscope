@@ -19,7 +19,7 @@ export interface VehicleRow extends SqlRow {
 }
 
 export interface ListingRow extends SqlRow {
-  id: string; vehicle_id: string; source_id: string; origin: string | null; source_listing_id: string;
+  id: string; vehicle_id: string; source_id: string; source_listing_id: string;
   url: string; title: string; first_seen_at: string; last_seen_at: string;
   delisted_at: string | null;
 }
@@ -69,7 +69,6 @@ export function toListing(row: ListingRow, photos: readonly Photo[]): Listing {
     id: row.id,
     vehicleId: row.vehicle_id,
     sourceId: row.source_id,
-    origin: row.origin,
     sourceListingId: row.source_listing_id,
     url: row.url,
     title: row.title,

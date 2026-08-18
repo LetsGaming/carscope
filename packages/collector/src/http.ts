@@ -31,6 +31,8 @@ export interface RequestOptions {
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
 export const BLOCKED_STATUS: ReadonlySet<number> = new Set([401, 403, 405, 429]);
+/** Not-found is its own answer: the list URL has no such search behind it. */
+const NOT_FOUND_STATUS = 404;
 const CHALLENGE_MARKERS = ["datadome", "captcha-delivery", "akamai reference", "px-captcha"];
 const CONSENT_MARKERS = ["sourcepoint", "cmp-container", "privacy-mgmt", "cookie-consent-banner"];
 const CONSENT_WALL_MAX_BYTES = 12_000;
@@ -251,6 +253,12 @@ export class HttpClient {
 
       if (BLOCKED_STATUS.has(res.status)) {
         return err(failure(FAILURE.blocked, `${host} refused the request`, res.status));
+      }
+      // A 404 means the page is not there, which for a list URL is the portal
+      // saying it has no such search — not an error to show the body of. Read as
+      // itself so the note says so, rather than dumping a 404 page into it.
+      if (res.status === NOT_FOUND_STATUS) {
+        return err(failure(FAILURE.notFound, `${host} has no page for this search (404)`, res.status));
       }
       if (!res.ok) {
         const detail = transport === this.#defaults.transport || transport === fetch
