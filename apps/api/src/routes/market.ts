@@ -9,6 +9,7 @@ import { ErrorSchema, IdParams } from "../schemas.ts";
 import { NotFound } from "../errors.ts";
 import { assertRangesValid } from "../validation.ts";
 import { collectionKey, type CollectionJob } from "../plugins/collector.ts";
+import { SCOPE } from "../services/api-keys.ts";
 import type { MarketReport, PricedResult } from "../services/market.ts";
 
 const DistributionSchema = Type.Object({
@@ -179,6 +180,7 @@ const market: FastifyPluginAsyncTypebox = async (app) => {
    */
   app.post("/collect", {
     schema: { querystring: CriteriaQuery, response: { 202: JobSchema, 400: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
   }, async (req, reply) => {
     const criteria = criteriaFromQuery(req.query);
     const job = app.startCollection(

@@ -22,8 +22,21 @@ background rather than inside a handler.
 ## Tables
 
 `searches`, `vehicles`, `listings`, `price_snapshots`, `photos`, `runs`,
-`fx_rates`, `source_settings`, `lookup_cache`, plus `schema_migrations`. Seven
-indexes cover the columns the filter sorts and searches on.
+`fx_rates`, `source_settings`, `lookup_cache`, `api_keys`, `webhooks`, plus
+`schema_migrations`. Indexes cover the columns the filter sorts and searches on.
+
+`api_keys` and `webhooks` were added in `002_public_api.sql` — `001_init.sql`
+is frozen by its checksum, so a schema change is always a new numbered file,
+never an edit to an existing one. `api_keys.token_hash` is a SHA-256 of the
+issued secret, `UNIQUE`, and is the only thing ever stored — the plaintext is
+shown once, by the `keys` CLI, and cannot be recovered. `webhooks.notified_through`
+is a cursor over `vehicles.rowid`: several collector workers resolve vehicles
+concurrently and stamp `first_seen_at` inside the same synchronous block as
+the insert, so a tight loop can produce rows sharing one millisecond — a
+timestamp cursor would skip or redeliver those, while `rowid`, assigned at
+insert, cannot tie. `repositories/vehicles.ts` `since()` is the one query that
+reads this cursor, shared by the public `?cursor=` feed and the webhook
+dispatcher so the two can never disagree about what "new" means.
 
 Two shapes carry the model:
 
@@ -48,6 +61,8 @@ repositories/lookups.ts        cached portal lookups, implements LookupCache
 repositories/filter.ts         criteria to a parameterised WHERE clause
 repositories/rows.ts           row shapes and the mappers to domain types
 repositories/criteria-json.ts  the checked reader for stored criteria
+repositories/api-keys.ts       api_keys: lookup by hash, issue, revoke, touch
+repositories/webhooks.ts       webhooks: per-search lookup, advance, disable
 ```
 
 A repository answers questions. A service decides. `VehicleRepository.search`

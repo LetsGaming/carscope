@@ -24,6 +24,31 @@ export interface Config {
   readonly dataDir: string;
   readonly databaseFile: string;
   readonly webRoot: string | null;
+  /**
+   * Trusted only when a reverse proxy sits in front and this process cannot be
+   * reached directly. Setting it while the port is open to anything else lets
+   * any caller spoof `x-forwarded-for` and pick their own rate-limit bucket —
+   * strictly worse than not rate-limiting at all, because it looks protected.
+   */
+  readonly trustProxy: boolean | number | readonly string[];
+  readonly public: {
+    readonly enabled: boolean;
+    readonly defaultLimit: number;
+    readonly maxLimit: number;
+    readonly cacheTtlMs: number;
+  };
+  readonly apiKeysRequired: boolean;
+  readonly rateLimit: {
+    readonly windowMs: number;
+    readonly anonMax: number;
+    readonly keyMax: number;
+    readonly writeMax: number;
+  };
+  readonly webhooks: {
+    readonly timeoutMs: number;
+    readonly maxItems: number;
+    readonly maxFailures: number;
+  };
   readonly collect: {
     readonly intervalMinutes: number;
     readonly userAgent: string;
@@ -80,6 +105,21 @@ const toBrowserMode = (value: string | undefined): BrowserMode =>
     : BROWSER_MODE.auto;
 
 /**
+ * Empty/unset means false, which is the only safe default: Fastify's
+ * `trustProxy` decides which caller `request.ip` believes, and believing a
+ * header nobody has to earn turns the rate limit into decoration.
+ */
+function toTrustProxy(value: string | undefined): boolean | number | readonly string[] {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") return false;
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  const hops = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(hops) && String(hops) === trimmed) return hops;
+  return list(value);
+}
+
+/**
  * A user agent naming the tool is honest but announces a bot, and mobile.de
  * refuses it outright. Only plain fetches use this; the browser sends its own.
  */
@@ -93,6 +133,16 @@ const DEFAULT_SOURCES = ["kleinanzeigen", "autoscout24", "autouncle"] as const;
 const int = (value: string | undefined, fallback: number): number => {
   const n = Number.parseInt(value ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+/**
+ * `int` treats `0` as unset, which is right for a page size or an interval but
+ * wrong for a setting whose zero is a real, meaningful value (a cache TTL of
+ * zero disables caching outright rather than falling back to the default).
+ */
+const nonNegativeInt = (value: string | undefined, fallback: number): number => {
+  const n = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 };
 
 const list = (value: string | undefined): string[] =>
@@ -122,6 +172,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir,
     databaseFile: optional(env["DATABASE_FILE"]) ?? join(dataDir, "carscope.sqlite"),
     webRoot: optional(env["WEB_ROOT"]),
+    trustProxy: toTrustProxy(env["TRUST_PROXY"]),
+    public: {
+      enabled: env["PUBLIC_API"] !== "false",
+      defaultLimit: int(env["PUBLIC_DEFAULT_LIMIT"], 50),
+      maxLimit: int(env["PUBLIC_MAX_LIMIT"], 200),
+      cacheTtlMs: nonNegativeInt(env["PUBLIC_CACHE_TTL_MS"], 30_000),
+    },
+    apiKeysRequired: env["API_KEYS_REQUIRED"] === "true",
+    rateLimit: {
+      windowMs: int(env["RATE_LIMIT_WINDOW_MS"], 60_000),
+      anonMax: int(env["RATE_LIMIT_ANON_MAX"], 30),
+      keyMax: int(env["RATE_LIMIT_KEY_MAX"], 600),
+      writeMax: int(env["RATE_LIMIT_WRITE_MAX"], 60),
+    },
+    webhooks: {
+      timeoutMs: int(env["WEBHOOK_TIMEOUT_MS"], 10_000),
+      maxItems: int(env["WEBHOOK_MAX_ITEMS"], 50),
+      maxFailures: int(env["WEBHOOK_MAX_FAILURES"], 10),
+    },
     collect: {
       intervalMinutes: int(env["COLLECT_INTERVAL_MINUTES"], 360),
       // Only used for plain fetches. Browser requests keep Chrome's own header,

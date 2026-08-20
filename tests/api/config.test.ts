@@ -54,6 +54,22 @@ test("an unwritable data directory says so, instead of failing as SQLite", (t) =
   );
 });
 
+test("TRUST_PROXY is false unless explicitly set — the only safe default behind an unknown network", () => {
+  assert.equal(loadConfig({}).trustProxy, false);
+  assert.equal(loadConfig({ TRUST_PROXY: "" }).trustProxy, false);
+  assert.equal(loadConfig({ TRUST_PROXY: "true" }).trustProxy, true);
+  assert.equal(loadConfig({ TRUST_PROXY: "false" }).trustProxy, false);
+  assert.equal(loadConfig({ TRUST_PROXY: "2" }).trustProxy, 2);
+  assert.deepEqual(loadConfig({ TRUST_PROXY: "10.0.0.0/8, 127.0.0.1" }).trustProxy, ["10.0.0.0/8", "127.0.0.1"]);
+});
+
+test("a zero-meaning setting like a cache TTL is not treated as unset", () => {
+  // `int()` folds 0 back to the default, which is right for a page size but
+  // wrong for PUBLIC_CACHE_TTL_MS=0, whose whole point is to disable caching.
+  assert.equal(loadConfig({ PUBLIC_CACHE_TTL_MS: "0" }).public.cacheTtlMs, 0);
+  assert.equal(loadConfig({}).public.cacheTtlMs, 30_000, "still defaults when genuinely unset");
+});
+
 test("a writable directory is created on demand, however deep", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "carscope-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

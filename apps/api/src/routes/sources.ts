@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { ErrorSchema, IdParams } from "../schemas.ts";
 import { RUN_STATUS, type RunStatus } from "@carscope/collector";
 import { NotFound } from "../errors.ts";
+import { SCOPE } from "../services/api-keys.ts";
 
 const SourceSchema = Type.Object({
   id: Type.String(),
@@ -61,6 +62,7 @@ const sources: FastifyPluginAsyncTypebox = async (app) => {
       body: Type.Object({ enabled: Type.Boolean() }),
       response: { 200: Type.Array(SourceSchema), 404: ErrorSchema },
     },
+    preHandler: app.requireScope(SCOPE.write),
   }, async (req) => {
     if (!app.adapters.some((a) => a.id === req.params.id)) throw new NotFound("source");
     app.sourceSettings.setEnabled(req.params.id, req.body.enabled);

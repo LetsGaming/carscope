@@ -7,6 +7,8 @@ import { RunRepository } from "../repositories/runs.ts";
 import { FxRepository } from "../repositories/fx.ts";
 import { SourceSettingsRepository } from "../repositories/sources.ts";
 import { LookupRepository } from "../repositories/lookups.ts";
+import { ApiKeyRepository } from "../repositories/api-keys.ts";
+import { WebhookRepository } from "../repositories/webhooks.ts";
 import { MarketService } from "../services/market.ts";
 
 declare module "fastify" {
@@ -18,6 +20,8 @@ declare module "fastify" {
     fx: FxRepository;
     sourceSettings: SourceSettingsRepository;
     lookups: LookupRepository;
+    apiKeys: ApiKeyRepository;
+    webhooks: WebhookRepository;
     market: MarketService;
   }
 }
@@ -36,6 +40,8 @@ export default fp(async function storage(
   app.decorate("fx", new FxRepository(db));
   app.decorate("sourceSettings", new SourceSettingsRepository(db, opts.defaultSources));
   app.decorate("lookups", new LookupRepository(db));
+  app.decorate("apiKeys", new ApiKeyRepository(db));
+  app.decorate("webhooks", new WebhookRepository(db));
   app.decorate("market", new MarketService(vehicles));
 
   app.addHook("onClose", async () => { db.close(); });

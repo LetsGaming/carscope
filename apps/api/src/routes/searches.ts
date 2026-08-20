@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { ErrorSchema, IdParams, SearchBody, SearchSchema, toSearchDto } from "../schemas.ts";
 import { NotFound } from "../errors.ts";
 import { assertRangesValid } from "../validation.ts";
+import { SCOPE } from "../services/api-keys.ts";
 
 const searches: FastifyPluginAsyncTypebox = async (app) => {
   app.get("/", {
@@ -11,6 +12,7 @@ const searches: FastifyPluginAsyncTypebox = async (app) => {
 
   app.post("/", {
     schema: { body: SearchBody, response: { 201: SearchSchema, 400: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
   }, async (req, reply) => {
     assertRangesValid(req.body.criteria);
     reply.code(201);
@@ -19,6 +21,7 @@ const searches: FastifyPluginAsyncTypebox = async (app) => {
 
   app.put("/:id", {
     schema: { params: IdParams, body: SearchBody, response: { 200: SearchSchema, 404: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
   }, async (req) => {
     assertRangesValid(req.body.criteria);
     const updated = app.searches.update(req.params.id, req.body.name, req.body.criteria);
@@ -28,6 +31,7 @@ const searches: FastifyPluginAsyncTypebox = async (app) => {
 
   app.delete("/:id", {
     schema: { params: IdParams, response: { 204: Type.Null(), 404: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
   }, async (req, reply) => {
     if (!app.searches.remove(req.params.id)) throw new NotFound("search");
     reply.code(204);
@@ -42,6 +46,7 @@ const searches: FastifyPluginAsyncTypebox = async (app) => {
         404: ErrorSchema,
       },
     },
+    preHandler: app.requireScope(SCOPE.write),
   }, async (req, reply) => {
     const search = app.searches.findById(req.params.id);
     if (search === null) throw new NotFound("search");

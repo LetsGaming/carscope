@@ -14,6 +14,8 @@ import {
 } from "./rows.ts";
 
 type CandidateRow = VehicleRow & { latest_price: number | null; title: string | null };
+/** A `since()` row: the search shape plus the rowid cursor and when the car was first seen. */
+export type FeedRow = ResultRow & { seq: number; first_seen_at: string };
 interface ObservationRow extends SqlRow { baseAmount: number; observedAt: string }
 interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; photos: number }
 interface ListingOwnerRow extends SqlRow { vehicle_id: string }
@@ -100,6 +102,48 @@ export class VehicleRepository {
       WHERE ${where}
       ORDER BY v.last_seen_at DESC
     `), ...params);
+  }
+
+  /**
+   * The change feed a public cursor and a webhook both read: vehicles created
+   * after `cursor`, oldest first. `rowid` is assigned at insert, so unlike
+   * `first_seen_at` — several resolves can share a millisecond under
+   * concurrency — it orders exactly as vehicles were created and every value is
+   * distinct. `search()` cannot be reused here: it orders by `last_seen_at DESC`
+   * for the browsing view, which would truncate the wrong end of a `LIMIT`.
+   */
+  since(criteria: Criteria, cursor: number, limit: number): { items: FeedRow[]; nextCursor: number | null } {
+    const { where, params } = buildFilter(criteria, true);
+    const rows = allRows<FeedRow>(this.#db.prepare(`
+      WITH latest AS (
+        SELECT vehicle_id, base_amount AS amount, MAX(observed_at) AS at
+        FROM price_snapshots GROUP BY vehicle_id
+      )
+      SELECT
+        v.rowid AS seq,
+        v.id, v.make, v.model, v.variant, v.body_style, v.first_registration,
+        v.mileage_km, v.power_w, v.fuel, v.gearbox, v.seller_type, v.seller_name,
+        v.market, v.city, v.postal_code, v.first_seen_at,
+        latest.amount AS current_price,
+        NULL AS first_price, 0 AS price_changes,
+        v.first_listed_at,
+        CAST(julianday(COALESCE(v.delisted_at, v.last_seen_at))
+             - julianday(COALESCE(v.first_listed_at, v.first_seen_at)) AS INTEGER) AS days_listed,
+        CASE WHEN v.first_listed_at IS NULL THEN 0 ELSE 1 END AS days_listed_exact,
+        (SELECT COUNT(*) FROM photos p WHERE p.vehicle_id = v.id) AS photo_count,
+        (SELECT p.local_path FROM photos p WHERE p.vehicle_id = v.id ORDER BY p.position LIMIT 1) AS thumb_path,
+        (SELECT p.url FROM photos p WHERE p.vehicle_id = v.id ORDER BY p.position LIMIT 1) AS thumb_url,
+        (SELECT group_concat(DISTINCT l.source_id) FROM listings l WHERE l.vehicle_id = v.id) AS sources,
+        (SELECT l.url FROM listings l WHERE l.vehicle_id = v.id ORDER BY l.first_seen_at LIMIT 1) AS listing_url
+      FROM vehicles v
+      JOIN latest ON latest.vehicle_id = v.id
+      WHERE v.rowid > ? AND ${where}
+      ORDER BY v.rowid
+      LIMIT ?
+    `), cursor, ...params, limit);
+
+    const last = rows[rows.length - 1];
+    return { items: rows, nextCursor: last === undefined ? null : last.seq };
   }
 
   observations(criteria: Criteria, sinceIso: string): { baseAmount: number; observedAt: string }[] {

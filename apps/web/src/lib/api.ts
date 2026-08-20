@@ -1,13 +1,17 @@
 import type {
   CollectionJob, EditableCriteria, MarketReport, Result, SavedSearch, Source,
 } from "./types";
+import { readStoredApiKey } from "./useApiKey";
 
 export class ApiError extends Error {
   readonly status: number;
+  /** True on 401/403, so a caller can prompt for a key rather than show a generic error. */
+  readonly unauthorized: boolean;
   constructor(status: number, message: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.unauthorized = status === 401 || status === 403;
   }
 }
 
@@ -17,10 +21,12 @@ export class ApiError extends Error {
  * server; keeping the assertion here means no component or composable repeats it.
  */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const apiKey = readStoredApiKey();
   const res = await fetch(`/api${path}`, {
     ...init,
     headers: {
       ...(init?.body === undefined ? {} : { "content-type": "application/json" }),
+      ...(apiKey === null ? {} : { authorization: `Bearer ${apiKey}` }),
       ...init?.headers,
     },
   });

@@ -15,6 +15,7 @@ import {
 import type { SourceAdapter } from "@carscope/core";
 import { SqliteCollectorStore } from "../services/store.ts";
 import { PhotoJanitor } from "../services/photo-janitor.ts";
+import { WebhookDispatcher } from "../services/webhooks.ts";
 import { BROWSER_MODE, type Config } from "../config.ts";
 
 export interface CollectionTarget {
@@ -230,6 +231,7 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
   const photos = cfg.storePhotos ? new PhotoStore(http, opts.config.dataDir) : undefined;
   const now = (): Date => new Date();
   const janitor = new PhotoJanitor(app.db, opts.config.dataDir, cfg.photoBudgetMb);
+  const dispatcher = new WebhookDispatcher(app.webhooks, app.vehicles, app.searches, opts.config.webhooks, now);
   const adapters = [...ALL_ADAPTERS, ...loadCustomSources(app, join(opts.config.dataDir, "sources.json"))];
   app.decorate("adapters", adapters);
 
@@ -337,6 +339,12 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
     if (pruned !== null && pruned.vehiclesPruned > 0) {
       app.log.info(pruned, "pruned photos of delisted vehicles to stay within budget");
     }
+
+    // Awaited here, inside `run()`, so `collectionIdle()` covers delivery and a
+    // test can wait for it deterministically rather than racing a fetch.
+    await dispatcher.afterRun(target.id).catch((e: unknown) => {
+      app.log.error({ err: e, searchId: target.id }, "webhook dispatch failed");
+    });
   }
 
   app.decorate("startCollection", (target: CollectionTarget, force: boolean): CollectionJob => {

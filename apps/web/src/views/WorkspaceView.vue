@@ -3,14 +3,17 @@ import { computed, onMounted, ref, watch } from "vue";
 import FilterBar from "../components/FilterBar.vue";
 import SearchRail from "../components/SearchRail.vue";
 import SourcePanel from "../components/SourcePanel.vue";
+import ApiKeyField from "../components/ApiKeyField.vue";
 import ResultRow from "../components/ResultRow.vue";
 import MarketPane from "../components/MarketPane.vue";
 import { useWorkspace } from "../lib/useWorkspace";
+import { useApiKey } from "../lib/useApiKey";
 import { api } from "../lib/api";
 import type { Source } from "../lib/types";
 import { relativeTime } from "../lib/format";
 
 const ws = useWorkspace();
+const { apiKey } = useApiKey();
 const tab = ref<"angebote" | "markt">("angebote");
 const layout = ref<"list" | "grid">("list");
 const sort = ref<"vsMedian" | "price" | "days" | "mileage">("vsMedian");
@@ -113,7 +116,10 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
       </p>
     </header>
 
-    <SourcePanel v-if="showSources" :sources="sources" @toggle="toggleSource" />
+    <template v-if="showSources">
+      <SourcePanel :sources="sources" @toggle="toggleSource" />
+      <ApiKeyField :api-key="apiKey" @update:api-key="apiKey = $event" />
+    </template>
 
     <FilterBar
       v-model="ws.criteria.value"

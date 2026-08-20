@@ -102,7 +102,20 @@ changes that.
 | `LOG_LEVEL` | `info` | Pino level; `silent` in tests |
 | `WEB_ROOT` | unset | Serve a built SPA from this path |
 | `HTTPS` | `false` | Behind TLS; enables headers browsers ignore on plain HTTP |
-| `CORS_ORIGIN` | unset | Comma-separated allowed origins |
+| `CORS_ORIGIN` | unset | Comma-separated allowed origins for `/api/*`; `/api/public/v1/*` always allows any origin |
+| `TRUST_PROXY` | `false` | `true`, a hop count, or a comma-separated CIDR/IP list — see the warning below |
+| `PUBLIC_API` | `true` | `false` removes `/api/public/v1/*` entirely |
+| `PUBLIC_DEFAULT_LIMIT` | `50` | Items per page on a public list when `?limit=` is absent |
+| `PUBLIC_MAX_LIMIT` | `200` | Hard cap on `?limit=`, regardless of what is asked for |
+| `PUBLIC_CACHE_TTL_MS` | `30000` | How long a public response is memoised; `0` disables caching |
+| `API_KEYS_REQUIRED` | `false` | `true` requires a `write`-scoped key on every mutating endpoint |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | The window every rate-limit tier below counts against |
+| `RATE_LIMIT_ANON_MAX` | `30` | Requests per window with no API key |
+| `RATE_LIMIT_KEY_MAX` | `600` | Requests per window for any key, scoped or not |
+| `RATE_LIMIT_WRITE_MAX` | `60` | Requests per window on a write endpoint |
+| `WEBHOOK_TIMEOUT_MS` | `10000` | Deadline for one webhook delivery attempt |
+| `WEBHOOK_MAX_ITEMS` | `50` | Vehicles included in one webhook payload |
+| `WEBHOOK_MAX_FAILURES` | `10` | Consecutive failures before a webhook disables itself |
 | `COLLECT_ENABLED_SOURCES` | the three DE portals | Initial adapter selection |
 | `COLLECT_INTERVAL_MINUTES` | `360` | Scheduler tick basis |
 | `COLLECT_MIN_HOST_INTERVAL_MS` | `2500` | Minimum gap between requests to one host |
@@ -144,6 +157,31 @@ error from its last attempt.
 
 `mock` is a deterministic in-process source. It needs no network and is what the
 test suite exercises.
+
+## Exposing the API publicly
+
+Only `/api/public/v1/*` is meant to be reachable from the internet — see
+[http-api.md](http-api.md) for what it offers and why it is safe to expose
+where `/api/*` is not. Everything else assumes the trusted-network posture
+this project has always had, unless deliberately widened:
+
+```
+API_KEYS_REQUIRED=true      # write endpoints now need a `write`-scoped key
+npm run keys -- issue "some-dashboard" --scope admin
+```
+
+**`TRUST_PROXY` is false unless a reverse proxy is the only way to reach this
+process.** Rate limiting keys its anonymous bucket on `req.ip`, which Fastify
+only trusts a client-supplied `x-forwarded-for` for when `trustProxy` is set.
+Setting it while the port is reachable by anything other than that proxy lets
+any caller spoof the header and pick their own bucket — strictly worse than
+not rate-limiting at all, because it looks protected and is not. Leave it
+unset unless you know exactly what sits between the internet and this port.
+
+Keys are issued only by `npm run keys -- issue`, never through the API itself
+(see the CLI's own `--help` via `npm run keys` with no arguments). Revoke one
+with `npm run keys -- revoke <prefix>`; list what exists with `npm run keys --
+list`.
 
 ## Troubleshooting
 

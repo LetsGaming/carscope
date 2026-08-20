@@ -24,7 +24,14 @@ schema is the validator, the serialiser and the handler's types at once.
 | `GET` | `/api/events` | SSE stream of job progress |
 | `GET` | `/api/sources` | Sources with state and health |
 | `PATCH` | `/api/sources/:id` | Enable or disable one, returns the list |
+| `GET` | `/api/webhooks` | Registered webhooks (admin) |
+| `POST` | `/api/webhooks` | Register one against a saved search (admin), 201 shows the secret once |
+| `DELETE` | `/api/webhooks/:id` | Remove one (admin) |
 | `GET` | `/media/*` | Stored photos, cached for a week |
+| `GET` | `/api/public/v1/searches` | Saved search names, `{id, name}` only |
+| `GET` | `/api/public/v1/searches/:id/vehicles` | Public vehicle summaries, `?limit=` |
+| `GET` | `/api/public/v1/searches/:id/market` | A narrow public market summary |
+| `GET` | `/api/public/v1/searches/:id/feed` | Change feed, `?cursor=&limit=` |
 
 ## Schemas
 
@@ -130,6 +137,113 @@ app with a different config.
   then the database. The solver holds nothing to close; its clearances are
   in-memory and discarded with the process.
 
-There is no authentication. carscope is a single-user self-hosted tool and
-assumes a trusted network. Exposing it publicly needs an authenticating proxy in
-front, and the write endpoints would need rate limiting.
+There is no authentication on `/api/*` by default — carscope is still a
+single-user self-hosted tool and assumes a trusted network there. What changed
+is that a second, narrow surface now exists for exposing the data itself.
+
+## The public namespace
+
+`/api/public/v1/*` is the only part of the API meant to be reachable from the
+internet. Three decisions make that safe to do without touching anything else:
+
+- **Read-only, saved-searches-only.** No arbitrary criteria on the query
+  string — a caller reads `/searches`, then a specific search's vehicles,
+  market or feed. That makes the whole response set finite and enumerable,
+  which is what makes a 30 s TTL memo (`PUBLIC_CACHE_TTL_MS`,
+  `services/public-cache.ts`) an effective defence: repeating the same request
+  costs nothing after the first hit, rather than being merely rate-limited.
+- **Its own DTOs** (`routes/public/dto.ts`), narrower than the internal
+  schemas and never re-exporting them — `ResultSchema` in `routes/market.ts`
+  is free to change shape without breaking a promise made to an outside
+  consumer.
+- **`access-control-allow-origin: *` unconditionally**, regardless of
+  `CORS_ORIGIN` — a browser on any origin can read it, and it never carries
+  credentials. The internal namespace's CORS is unaffected: with `CORS_ORIGIN`
+  unset it still sends no CORS headers at all. Both are one `@fastify/cors`
+  registration using the delegate form, keyed on the request path
+  (`app.ts`), so there is exactly one place deciding either policy.
+
+`/media/*` photos served through the public namespace need
+`cross-origin-resource-policy: cross-origin` on top of CORS — helmet's default
+`same-origin` blocks an `<img>` loading them in `no-cors` mode even though a
+`fetch` would be fine. `routes/public/index.ts` sets that header on every
+response it returns.
+
+### The change feed
+
+`GET /api/public/v1/searches/:id/feed?cursor=&limit=` returns vehicles newly
+first-seen for that search, oldest first, as `{ items, nextCursor }`. The
+cursor rides on `vehicles.rowid`, not `first_seen_at`: several collector
+workers resolve vehicles concurrently
+(`packages/collector/src/plugins/collector.ts` runs `cfg.concurrency` of them
+at once), and `VehicleRepository.resolve` stamps its timestamp inside the same
+synchronous block as the `INSERT`, so a tight loop can produce several rows
+sharing one millisecond. A `>` cursor on that skips ties; a `>=` cursor
+redelivers them. `rowid` is assigned at insert and never ties, so reading with
+the same cursor twice is exactly idempotent — see `repositories/vehicles.ts`
+`since()`. `?since=<iso>` is deliberately not offered as a cursor for the same
+reason; a plain timestamp filter would need the same guarantee and cannot give it.
+
+## API keys
+
+`API_KEYS_REQUIRED` (default `false`) decides whether the write endpoints
+(`POST`/`PUT`/`DELETE /api/searches*`, `POST /api/collect`,
+`PATCH /api/sources/:id`, all of `/api/webhooks`) require a key. With it unset,
+nothing here changes from before — the bundled SPA and every existing script
+keep working on a trusted network exactly as they did.
+
+A key is `Authorization: Bearer csk_<prefix>_<secret>`, issued only by
+`npm run keys -- issue <label> [--scope admin] [--expires <iso>]` — a CLI
+against the database, not an API endpoint, because a key can only be as
+trustworthy as whoever can already reach the deployment. Only its SHA-256 is
+stored (`apps/api/src/db/migrations/002_public_api.sql`); the plaintext is
+shown once and cannot be recovered. Scopes are `write` and `admin` (`admin`
+implies `write`); there is no `read` scope — a key carrying neither still
+lifts its holder into the keyed rate tier (`RATE_LIMIT_KEY_MAX`) instead of the
+anonymous one, which is the whole effect of "no scopes".
+
+Revoke with `npm run keys -- revoke <prefix>`; a revoked or expired key reads
+identically to no key at all (401), not as a distinct error, so a caller
+cannot use the response to tell a revoked key from a typo.
+
+## Webhooks
+
+Admin-only (`/api/webhooks`). Registering one against a saved search returns
+its HMAC secret once, at creation. After a collection run for that search,
+`services/webhooks.ts` `WebhookDispatcher.afterRun` reads the same `since()`
+cursor the public feed uses and, if there is anything new, POSTs
+`{ searchId, items }` with `x-carscope-timestamp` and
+`x-carscope-signature: HMAC-SHA256(secret, timestamp + "." + body)`. The
+per-webhook cursor (`webhooks.notified_through`) advances **only on a 2xx
+response**, so a failing endpoint is retried on the next run rather than
+losing the gap; past `WEBHOOK_MAX_FAILURES` consecutive failures the webhook is
+disabled automatically.
+
+Dispatch is deliberately **not** wired into the collector run loop as a
+per-listing hook. `plugins/collector.ts` races each adapter against a stall
+watchdog and does not cancel the loser, so an abandoned worker can keep
+inserting vehicles for minutes after a job "finishes" — a hook fired during the
+run would miss those silently. Reading from the durable watermark after the
+run instead means nothing is lost, the payload reflects the fully enriched
+vehicle (detail page and photos already fetched), and a webhook and a polling
+browser hitting `/feed` can never disagree about what "new" means, since both
+read the same query.
+
+## Rate limiting
+
+`@fastify/rate-limit`, registered with `global: false` — a route is limited
+only where it opts into `config: { rateLimit }`, so `/api/health`,
+`/api/events` (which hijacks its reply for an SSE stream) and `/media/*` are
+never touched, by construction rather than by an exclusion list. The bucket
+key is the caller's API key id when present, otherwise `req.ip` — which is
+only trustworthy behind a reverse proxy that sets `TRUST_PROXY` accordingly;
+see `docs/operating.md`. A 429 carries the same `{error, message}` shape as
+every other error here (`{"error":"rate_limited","message":"too many
+requests"}`), via a small `Error` subclass in `plugins/rate-limit.ts` — the
+plugin's default `errorResponseBuilder` throws whatever it returns, and a
+plain object with no `statusCode` falls through the shared error handler to a
+misleading 500.
+
+Exposing it publicly still needs an authenticating proxy in front if you want
+more than the public namespace reachable, and the write endpoints should stay
+behind `API_KEYS_REQUIRED=true` once they are internet-facing.
