@@ -19,6 +19,7 @@ const PAGES = {
   mobile: fixture("mobilede-list.html"),
   kleinanzeigen: fixture("kleinanzeigen-list.html"),
   autoscout: fixture("autoscout24-list.html"),
+  autoscoutDetail: fixture("autoscout24-detail.html"),
 };
 
 const spec = { url: "https://www.autoscout24.de/lst" };
@@ -120,6 +121,27 @@ test("autoscout24 reads the page state blob", () => {
   assert.equal(first.attributes.gearbox, "manual");
   assert.equal(first.attributes.sellerType, "private");
   assert.equal(first.attributes.postalCode, "57520");
+});
+
+test("autoscout24 photos are upsized from the list page's thumbnail size to full resolution", () => {
+  const parsed = autoScout24.parseList(PAGES.autoscout, spec);
+  assert.ok(parsed.ok);
+  const first = parsed.value.listings[0];
+  assert.ok(first);
+  assert.ok(first.photoUrls.length > 0, "the list page carries photos at all");
+  for (const url of first.photoUrls) {
+    assert.match(url, /\/1920x1080\.webp$/, `expected full resolution, got ${url}`);
+  }
+});
+
+test("autoscout24 reads the seller notes off the detail page, line breaks intact", () => {
+  assert.ok(autoScout24.parseDetail);
+  const parsed = autoScout24.parseDetail(PAGES.autoscoutDetail);
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.error.message);
+  const description = parsed.value.attributes?.description ?? null;
+  assert.match(description ?? "", /FAHRZEUGDATEN:/);
+  assert.match(description ?? "", /\n/, "the seller's own line breaks survive");
+  assert.equal("photoUrls" in parsed.value, false, "the list page already ships every photo");
 });
 
 test("every adapter reports a failure rather than silence on an unknown page", () => {

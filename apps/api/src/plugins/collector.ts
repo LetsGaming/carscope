@@ -298,6 +298,10 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
                 maxDetails: cfg.maxDetails,
                 // One page fetch is the worst case for one detail page.
                 detailReserveMs: cfg.timeoutMs,
+                // A first/manual search (force) should answer as fast as the list
+                // pages alone; only the scheduler's unattended re-searches spend
+                // the extra time enriching what they find.
+                enrichDetails: !force,
                 solverSources: cfg.solverSources,
                 rateToBase: (c) => app.fx.rateFor(c),
               },

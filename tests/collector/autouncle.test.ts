@@ -9,6 +9,10 @@ const fixture = readFileSync(
   fileURLToPath(new URL("../fixtures/autouncle-de.html", import.meta.url)),
   "utf8",
 );
+const detailFixture = readFileSync(
+  fileURLToPath(new URL("../fixtures/autouncle-detail.html", import.meta.url)),
+  "utf8",
+);
 const SEARCH = "https://www.autouncle.de/de/gebrauchtwagen/Nissan/Skyline?s%5Bmin_hp%5D=280";
 const DE = { market: "DE", hints: {} } as const;
 
@@ -70,6 +74,13 @@ test('"PLZ Stadt, Region" yields both; "PLZ, Region" yields no city', () => {
   assert.equal(byId.get("224706435")?.attributes.city, null);
 });
 
+test("the card's photo is upsized from the medium thumbnail to the full asset", () => {
+  const [first] = domListings(fixture, SEARCH);
+  assert.ok(first);
+  assert.equal(first.photoUrls.length, 1);
+  assert.ok(!first.photoUrls[0]?.includes("/medium_"), first.photoUrls[0]);
+});
+
 test("a card with no subtitle carries no variant rather than an empty one", () => {
   const listing = domListings(fixture, SEARCH).find((l) => l.sourceListingId === "224706435");
   assert.equal("variant" in (listing?.attributes ?? {}), false);
@@ -103,4 +114,24 @@ test("a page with no cards is a parse failure, not silent success", () => {
   const parsed = autoUncle.parseList("<html><body>Keine Treffer</body></html>", { url: SEARCH });
   assert.equal(parsed.ok, false);
   assert.match(parsed.ok ? "" : parsed.error.message, /keine auswertbaren Inserate/);
+});
+
+test("the detail page's own gallery replaces the card's single thumbnail", () => {
+  assert.ok(autoUncle.parseDetail);
+  const parsed = autoUncle.parseDetail(detailFixture);
+  assert.ok(parsed.ok, parsed.ok ? "" : parsed.error.message);
+  assert.deepEqual(parsed.value.photoUrls, [
+    "https://images.autouncle.com/de/car_images/77254678-6bf8-4f6c-8712-d7c8250365b9_1998-nissan-skyline-280.webp",
+    "https://images.autouncle.com/de/car_images/473c269b-3e07-4ecd-bfc6-e3b10031fe96_1998-nissan-skyline-280.webp",
+    "https://images.autouncle.com/de/car_images/d1cb35ae-f9ae-4e49-acb9-af0f406b8fa6_1998-nissan-skyline-280.webp",
+    "https://images.autouncle.com/de/car_images/9db34105-873c-45eb-a7b8-8630c82f7d1b_1998-nissan-skyline-280.webp",
+  ]);
+});
+
+test("a similar car further down the same page is not mistaken for this car's photo", () => {
+  assert.ok(autoUncle.parseDetail);
+  const parsed = autoUncle.parseDetail(detailFixture);
+  assert.ok(parsed.ok);
+  const stranger = parsed.value.photoUrls?.some((u) => u.includes("1985-mercedes-190-185"));
+  assert.equal(stranger, false);
 });

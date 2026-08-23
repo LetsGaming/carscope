@@ -96,7 +96,28 @@ export const autoUncle: SourceAdapter = {
     // the whole market degraded, so pagination is deliberately not followed.
     return ok({ listings, hasMore: false });
   },
+
+  /**
+   * The card only ever names one photo, so the rest of the gallery is a real
+   * gap the card's own URL cannot fill by resizing — unlike the one photo it
+   * does carry, see `fullSizeImage` below. There is no free-text description
+   * here — AutoUncle never hosts the advert's own text, only a link to the
+   * portal it was read from.
+   */
+  parseDetail(body: string): Result<Partial<RawListing>> {
+    const photoUrls = detailPhotos(body);
+    return ok({ ...(photoUrls.length > 0 ? { photoUrls } : {}), attributes: {} });
+  },
 };
+
+/**
+ * The card's image is `medium_{asset}.webp`; the same asset without that
+ * prefix is the full-resolution photo the detail page renders — a filename
+ * substitution on data the card already carries, not a second request.
+ */
+function fullSizeImage(url: string): string {
+  return url.replace(/\/medium_/, "/");
+}
 
 const CARD_LINK = /href="(\/[a-z]{2}\/d\/(\d+)[^"]*)"/;
 const SPEC_ITEM = /<li[^>]*>([^<]{2,40})<\/li>/g;
@@ -159,7 +180,7 @@ export function domListings(html: string, searchUrl: string): RawListing[] {
       title,
       price,
       currency: CURRENCY.eur,
-      photoUrls: image === undefined ? [] : [image],
+      photoUrls: image === undefined ? [] : [fullSizeImage(image)],
       attributes: {
         ...(make === null ? {} : { make }),
         ...(model === null ? {} : { model }),
@@ -180,6 +201,26 @@ export function domListings(html: string, searchUrl: string): RawListing[] {
     });
   }
   return found;
+}
+
+/**
+ * "Similar cars" further down the same page are other people's listings,
+ * hosted on the same image domain with the same path shape, so a plain host
+ * match would mix a stranger's car into this one's gallery. Cutting the
+ * document at the sponsored-offers section, and dropping the thumbnail row's
+ * `small_`-prefixed duplicates of the same images, leaves only this car's own
+ * full-size photos.
+ */
+const GALLERY_IMAGE = /https:\/\/images\.autouncle\.com\/[^"]+\.webp/g;
+const SPONSORED_MARKER = 'class="_j4UAK"';
+
+function detailPhotos(html: string): string[] {
+  const cut = html.indexOf(SPONSORED_MARKER);
+  const region = cut === -1 ? html : html.slice(0, cut);
+  const urls = [...region.matchAll(GALLERY_IMAGE)]
+    .map((m) => m[0])
+    .filter((url) => !url.includes("/small_"));
+  return [...new Set(urls)];
 }
 
 function originOf(url: string): string {

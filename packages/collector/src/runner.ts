@@ -24,6 +24,12 @@ export interface RunnerOptions {
    * of the source's budget is still left, so enrichment cannot run the clock out.
    */
   readonly detailReserveMs: number;
+  /**
+   * Whether a detail page may be fetched at all this run. Off for a first/manual
+   * search so it answers as fast as the list pages alone; on for the scheduler's
+   * automatic re-searches, which have the run budget to enrich what they find.
+   */
+  readonly enrichDetails: boolean;
   /** Sources routed through the challenge solver rather than our own browser. */
   readonly solverSources: readonly string[];
   /** Rate to base currency at collection time; stored per snapshot. */
@@ -201,7 +207,7 @@ async function collectMarket(
       // watchdog mid-car, reported as a portal that had stopped answering when
       // it had answered every time. A car left unenriched keeps
       // `detail_fetched_at` unset and is picked up by the next run.
-      if (adapter.parseDetail && deps.store.needsDetail(resolved.vehicle.id)) {
+      if (deps.options.enrichDetails && adapter.parseDetail && deps.store.needsDetail(resolved.vehicle.id)) {
         if (details.taken >= deps.options.maxDetails) details.skipped += 1;
         else if (deps.now().getTime() + deps.options.detailReserveMs > deadline) {
           details.skipped += 1;

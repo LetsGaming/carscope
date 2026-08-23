@@ -91,7 +91,10 @@ test("a source that needs a browser and has none records a failed run, not an em
       http: client(),
       store,
       now: () => new Date("2026-08-06T00:00:00Z"),
-      options: { maxPages: 1, sourceDeadlineMs: 30_000, maxDetails: 25, detailReserveMs: 1_000, solverSources: [], rateToBase: () => 1 },
+      options: {
+        maxPages: 1, sourceDeadlineMs: 30_000, maxDetails: 25, detailReserveMs: 1_000,
+        enrichDetails: true, solverSources: [], rateToBase: () => 1,
+      },
     },
     { ...mock, needsBrowser: true },
     { id: "s1", name: "R34", criteria: EMPTY_CRITERIA },

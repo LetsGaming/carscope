@@ -5,7 +5,7 @@ import {
   type Market, type Fuel, type Gearbox,
 } from "@carscope/core";
 import { asNumber, asString, embeddedJson, isRecord, pick, slug } from "../html.ts";
-import { germanNumber, powerLabelToWatt, registrationToIso } from "../text.ts";
+import { extractDescription, germanNumber, powerLabelToWatt, registrationToIso } from "../text.ts";
 import { normaliseMake, splitMakeModel } from "./make-model.ts";
 
 const HOST: Readonly<Record<string, string>> = {
@@ -91,7 +91,32 @@ export const autoScout24: SourceAdapter = {
       hasMore: listings.length > 0,
     });
     },
+
+  /**
+   * The list page's own JSON already carries every search result's full
+   * `images` array (upsized to full resolution in `toRaw`, see below), so the
+   * only thing worth the extra request is the free-text seller notes, which
+   * the list JSON never has.
+   */
+  parseDetail(body: string): Result<Partial<RawListing>> {
+    const description = extractDescription(body, "sellerNotesSection");
+    return ok({ attributes: description === null ? {} : { description } });
+  },
 };
+
+/**
+ * The list JSON's `images` are thumbnails — `.../250x188.webp` — while the
+ * detail page renders the same assets at `.../1920x1080.webp`. Both are the
+ * same resizing CDN and the same asset id, just a different size segment in
+ * the path, so the full-resolution photo is a string substitution on data the
+ * list page already returned rather than a second request per car.
+ */
+const IMAGE_SIZE = /\/\d+x\d+\.(webp|jpe?g)$/;
+const FULL_SIZE = "/1920x1080.$1";
+
+function fullSizeImage(url: string): string {
+  return IMAGE_SIZE.test(url) ? url.replace(IMAGE_SIZE, FULL_SIZE) : url;
+}
 
 /** Field names verified against a captured __NEXT_DATA__ payload. */
 function toRaw(node: unknown, host: string): RawListing[] {
@@ -118,7 +143,9 @@ function toRaw(node: unknown, host: string): RawListing[] {
     title: title || id,
     price,
     currency: CURRENCY.eur,
-    photoUrls: Array.isArray(images) ? images.filter((i): i is string => typeof i === "string") : [],
+    photoUrls: Array.isArray(images)
+      ? images.filter((i): i is string => typeof i === "string").map(fullSizeImage)
+      : [],
     attributes: {
       ...(make === null ? {} : { make }),
       ...(model === null ? {} : { model }),

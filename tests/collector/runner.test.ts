@@ -34,7 +34,10 @@ const httpStub = {
 const deps = (store: CollectorStore) => ({
   http: httpStub,
   store,
-  options: { maxPages: 3, sourceDeadlineMs: 30_000, maxDetails: 25, detailReserveMs: 1_000, solverSources: [], rateToBase: () => 1 },
+  options: {
+    maxPages: 3, sourceDeadlineMs: 30_000, maxDetails: 25, detailReserveMs: 1_000,
+    enrichDetails: true, solverSources: [], rateToBase: () => 1,
+  },
   now: () => new Date("2026-08-05T10:00:00Z"),
 });
 
@@ -125,7 +128,7 @@ test("enrichment stops before it can run the source's clock out", async () => {
     now: () => new Date(clock),
     options: {
       maxPages: 1, sourceDeadlineMs: 10_000, maxDetails: 25,
-      detailReserveMs: 1_000, solverSources: [], rateToBase: () => 1,
+      detailReserveMs: 1_000, enrichDetails: true, solverSources: [], rateToBase: () => 1,
     },
   }, withDetail, { id: "s1", name: "R34", criteria: EMPTY_CRITERIA });
 
@@ -138,4 +141,31 @@ test("enrichment stops before it can run the source's clock out", async () => {
     `stayed within a page of the budget, spent ${String(clock - start)}ms`,
   );
   assert.match(run.note ?? "", /aufgeschoben/, "and says what it left for the next run");
+});
+
+test("enrichDetails: false skips detail pages even when the adapter and store want one", async () => {
+  const { store: base } = stubStore();
+  const store: CollectorStore = { ...base, needsDetail: () => true };
+  let detailRequests = 0;
+
+  const http = {
+    async getText(url: string) {
+      if (!url.includes("page=")) detailRequests += 1;
+      return ok(new URL(url).search.slice(1));
+    },
+  } as unknown as HttpClient;
+
+  const withDetail: SourceAdapter = { ...mock, parseDetail: () => ok({ attributes: {} }) };
+
+  await collect({
+    http,
+    store,
+    now: () => new Date("2026-08-05T10:00:00Z"),
+    options: {
+      maxPages: 1, sourceDeadlineMs: 10_000, maxDetails: 25,
+      detailReserveMs: 1_000, enrichDetails: false, solverSources: [], rateToBase: () => 1,
+    },
+  }, withDetail, { id: "s1", name: "R34", criteria: EMPTY_CRITERIA });
+
+  assert.equal(detailRequests, 0, "a first/manual search never fetches a detail page");
 });

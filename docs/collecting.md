@@ -271,6 +271,42 @@ started while a full `COLLECT_TIMEOUT_MS` of the budget is left; the rest keep
 `detail_fetched_at` unset for the next run, and the source says how many it
 deferred.
 
+Every built-in adapter implements `parseDetail`, but each fetches only what its
+list page truly cannot answer:
+
+- **Kleinanzeigen**, **mobile.de**: photos and description, as above.
+- **AutoScout24**: description only, from `#sellerNotesSection`. Its list page
+  already names every search result's whole gallery in its `__NEXT_DATA__`
+  `images` array, just at thumbnail size (`.../250x188.webp`); the same
+  resizing CDN serves the identical asset at `.../1920x1080.webp`, so `toRaw`
+  upsizes each URL as a string substitution rather than fetching a detail page
+  for a photo it already has the id of. Only the free-text seller notes are
+  a real gap.
+- **AutoUncle**: photos, and only the ones the card's own URL cannot reach by
+  the same trick. The card names one photo at `medium_{asset}.webp`; dropping
+  that prefix (also a plain substitution, no request) reaches the same
+  full-resolution asset the detail page renders — but the *other* photos in
+  the gallery are never named on the card at all, so those still need the
+  detail page. It never hosts an advert's own free text either — a card links
+  out to the portal the listing came from. The "similar cars" strip further
+  down that same detail page is other people's listings on the same image
+  host, so the gallery reader stops at that section rather than trusting a
+  host match alone.
+
+Sources described in `sources.json` (see [operating.md](operating.md)) cannot
+enable detail-page fetching — there is no detail-URL field for them, only
+`unsupported`, `intervalHours` and the query fields `customAdapter` builds
+from.
+
+Even with `COLLECT_MAX_DETAILS` set, a **first or manual search never fetches a
+detail page** — the immediate run when a search is created or "collect now" is
+pressed (`force: true`, see `POST /searches/:id/collect` and `POST
+/market/collect?force=1`) answers from the list pages alone, as fast as any
+other source. Only the scheduler's unattended re-searches (`force: false`) spend
+the extra time enriching what they find; a car left unenriched by a first search
+gets its detail page on the next automatic run instead, same as one deferred by
+the run budget.
+
 ## Photos
 
 Photos are downloaded on the run that first sees a vehicle, or when its image set
