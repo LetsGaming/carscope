@@ -82,20 +82,18 @@ test("a later source never overwrites what an earlier one established", (t) => {
   assert.equal(second.vehicle.sellerName, "Autohaus Nord");
 });
 
-test("an aggregator's find names the portal the car is actually on", (t) => {
-  // "autouncle" is where we looked, not where the car is. AutoUncle results are
-  // adverts on mobile.de, AutoScout24 and others, and that is the useful answer.
+test("an aggregator's find is recorded under the source it was fetched from", (t) => {
+  // AutoUncle results are adverts on mobile.de, AutoScout24 and others, but a
+  // listing is attributed to AutoUncle, the source it was fetched from — not to
+  // the portal the advert originated on. Tracking the advert's true origin
+  // would be a cross-source concept no other adapter shares, for no real
+  // benefit over the search history already on the vehicle. See autouncle.ts.
   const vehicles = repo(t);
 
-  const found = vehicles.resolve(
-    { ...listing({}), origin: "mobile.de" },
-    adapter("autouncle"), null, NOW, "DE",
-  );
-  vehicles.upsertListing(found.vehicle.id, { ...listing({}), origin: "mobile.de" }, adapter("autouncle"), NOW);
-
+  const found = vehicles.resolve(listing({}), adapter("autouncle"), null, NOW, "DE");
+  vehicles.upsertListing(found.vehicle.id, listing({}), adapter("autouncle"), NOW);
   const stored = vehicles.findById(found.vehicle.id);
-  assert.equal(stored?.listings[0]?.origin, "mobile.de");
-  assert.equal(stored?.listings[0]?.sourceId, "autouncle", "how we found it is still recorded");
+  assert.equal(stored?.listings[0]?.sourceId, "autouncle", "how we found it is recorded");
 });
 
 test("a shouted make is settled on the way in", (t) => {
