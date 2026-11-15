@@ -27,6 +27,10 @@ RUN npm install --omit=dev --workspace @carscope/api --include-workspace-root \
  && chmod -R a+rX /ms-playwright \
  && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# The package manager CLIs are unused at runtime and bundle their own vulnerable dependencies.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 COPY packages ./packages
 COPY apps/api ./apps/api
 COPY --from=web /build/apps/web/dist ./web
