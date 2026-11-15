@@ -16,6 +16,13 @@ services:
     build: .
     image: carscope:latest
     restart: unless-stopped
+    # The entrypoint starts as root only to chown /data, then drops to CARSCOPE_UID.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 3g
+    pids_limit: 512
+    cpus: 1.5
     # Chromium spawns child processes; init reaps them instead of leaking zombies.
     init: true
     # Chromium is launched with --disable-dev-shm-usage, but headroom still helps.
