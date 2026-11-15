@@ -142,7 +142,7 @@ export async function build(opts: BuildOptions): Promise<FastifyInstance> {
     prefix: "/media/",
     decorateReply: false,
     index: false,
-    setHeaders: (res) => res.setHeader("cache-control", "public, max-age=604800, immutable"),
+    setHeaders: (res) => res.header("cache-control", "public, max-age=604800, immutable"),
   });
 
   app.get("/api/health", async () => ({ status: "ok" }));
