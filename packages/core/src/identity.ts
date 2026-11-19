@@ -42,6 +42,8 @@ export interface MatchInput extends IdentityInput {
   readonly imageHash: string | null;
   readonly powerW: number | null;
   readonly title: string;
+  /** Absent or null when the portal does not say; the attribute rule then cannot apply. */
+  readonly gearbox?: string | null;
 }
 
 export const MATCH_THRESHOLD = 0.72;
@@ -72,6 +74,45 @@ export function isCertainMatch(a: MatchInput, b: MatchInput): boolean {
     && a.priceBase === b.priceBase
     && compatibleRegistration(a.firstRegistration, b.firstRegistration)
   );
+}
+
+/**
+ * What "the same car" has to agree on when two portals share neither a seller
+ * nor a photo and one of them rounds the figures: the odometer within a few
+ * kilometres, the price within a rounding error, the registration within a
+ * month or two. Each is far tighter than the gap between two genuinely
+ * different cars of one model (an R34 at 86,933 km and €44,900 is not the R34
+ * at 89,745 km and €44,444).
+ */
+export const ATTRIBUTE_MILEAGE_KM = 250;
+export const ATTRIBUTE_PRICE_SPREAD = 0.01;
+export const ATTRIBUTE_POWER_W = 1_000;
+export const ATTRIBUTE_REGISTRATION_MONTHS = 2;
+
+/**
+ * Every attribute must be known on both sides and agree within tolerance. A
+ * missing value is not agreement: a car with no gearbox on one portal is
+ * left to the other rules rather than merged on four signals out of five.
+ * The model is not compared, for the reason `compatibleRegistration` gives.
+ */
+export function isAttributeMatch(a: MatchInput, b: MatchInput): boolean {
+  if (normaliseName(a.make) !== normaliseName(b.make)) return false;
+  if (!a.gearbox || a.gearbox !== b.gearbox) return false;
+  if (a.powerW === null || b.powerW === null) return false;
+  if (Math.abs(a.powerW - b.powerW) > ATTRIBUTE_POWER_W) return false;
+  if (a.mileageKm === null || b.mileageKm === null) return false;
+  if (Math.abs(a.mileageKm - b.mileageKm) > ATTRIBUTE_MILEAGE_KM) return false;
+  const spread = Math.abs(a.priceBase - b.priceBase) / Math.max(a.priceBase, b.priceBase, 1);
+  if (spread > ATTRIBUTE_PRICE_SPREAD) return false;
+  return registrationsClose(a.firstRegistration, b.firstRegistration);
+}
+
+/** "1999-06" and "1999-07" are one month apart; a bare year fits any month in it. */
+function registrationsClose(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return false;
+  if (a.length < 7 || b.length < 7) return a.slice(0, 4) === b.slice(0, 4);
+  const months = (v: string): number => Number(v.slice(0, 4)) * 12 + Number(v.slice(5, 7));
+  return Math.abs(months(a) - months(b)) <= ATTRIBUTE_REGISTRATION_MONTHS;
 }
 
 /**
@@ -129,5 +170,9 @@ export function matchScore(a: MatchInput, b: MatchInput): number {
   return score;
 }
 
+/** The two rules that need no scoring: one car advertised twice. */
+export const isDuplicate = (a: MatchInput, b: MatchInput): boolean =>
+  isCertainMatch(a, b) || isAttributeMatch(a, b);
+
 export const isSameVehicle = (a: MatchInput, b: MatchInput): boolean =>
-  isCertainMatch(a, b) || matchScore(a, b) >= MATCH_THRESHOLD;
+  isDuplicate(a, b) || matchScore(a, b) >= MATCH_THRESHOLD;

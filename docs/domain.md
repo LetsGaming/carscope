@@ -129,7 +129,7 @@ history is meaningless.
    the same car by definition. Fuzzy matching never runs for it.
 2. **Candidate narrowing.** A coarse `identityKey` of make, model, first
    registration, a 2.000 km mileage bucket and market, plus, separately, any
-   vehicle of the same make with the exact same mileage. Without that second
+   vehicle of the same make with a mileage within 250 km. Without that second
    lookup, two portals that name the model differently are never even compared.
 3. **Certainty.** Same make, same mileage to the kilometre and the same price to
    the euro is one car listed twice. The **model is deliberately not part of this
@@ -137,12 +137,29 @@ history is meaningless.
    disagreement says nothing about whether it is the same car. Registration is
    compared by common prefix, because one portal may know only the year where
    another knows the month.
-4. **Scoring.** `matchScore` weights a shared image-set hash most heavily, then
+4. **Attributes.** Portals round: one prints 89,750 km and a registration of
+   June, the other 89,745 km and July, at the same price. `isAttributeMatch`
+   merges when make and gearbox are equal, power is within 1 kW, mileage within
+   250 km, price within 1 %, and registration within 2 months (a bare year fits
+   any month in it). Every value must be known on both sides: a missing gearbox
+   is not agreement. The tolerances are constants in `packages/core/src/identity.ts`.
+   The 1 % price limit is what keeps an R34 at €44,900 apart from one at
+   €44,444 when their other figures are close.
+5. **Scoring.** `matchScore` weights a shared image-set hash most heavily, then
    the identity key, title overlap, seller, price, mileage and power. Merge at
    0.72.
 
 The threshold is deliberately conservative. Duplicates are visible and annoying;
 a false merge silently corrupts a price series.
+
+Rules 3 and 4 also run over what is already stored, once at the end of every
+collection job (`VehicleRepository.consolidate`). A duplicate that predates a
+rule, or whose gearbox only arrived with the detail page, would otherwise stay
+split, because a known advert skips matching. Merging keeps the vehicle with the
+lower rowid, since the webhook watermark and the public cursor ride on it, and
+moves the listings and price snapshots over. Hidden cars are not merged. Photos
+of an advert that was still being fetched while its vehicle was merged can fail
+to save; the next run repeats them.
 
 ## Delisting
 

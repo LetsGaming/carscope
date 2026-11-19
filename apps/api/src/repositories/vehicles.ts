@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
-  BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod, isSameVehicle,
+  ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
+  isDuplicate, isSameVehicle, toMarket,
   type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
 } from "@carscope/core";
 import type { ResolvedVehicle } from "@carscope/collector";
-import { allRows, changed, getRow, type Db, type SqlRow } from "../db/index.ts";
+import { allRows, changed, getRow, transaction, type Db, type SqlRow } from "../db/index.ts";
 import { buildFilter, HIDDEN_EXCLUDED, searchWords, textClause, type Param, type ResultRow } from "./filter.ts";
 import {
   toListing, toPhoto, toSnapshot, toVehicle,
@@ -14,6 +15,29 @@ import {
 } from "./rows.ts";
 
 type CandidateRow = VehicleRow & { latest_price: number | null; title: string | null };
+
+function toMatchInput(c: CandidateRow, market: Market, fallbackPrice: number): MatchInput {
+  return {
+    make: c.make, model: c.model,
+    firstRegistration: c.first_registration,
+    mileageKm: c.mileage_km,
+    market,
+    sellerName: c.seller_name,
+    priceBase: c.latest_price ?? fallbackPrice,
+    imageHash: c.image_hash,
+    powerW: c.power_w,
+    gearbox: c.gearbox,
+    title: c.title ?? [c.make, c.model, c.variant].filter(Boolean).join(" "),
+  };
+}
+
+const CANDIDATE_COLUMNS = `
+  v.*, v.rowid AS seq, (
+    SELECT ps.base_amount FROM price_snapshots ps
+    WHERE ps.vehicle_id = v.id ORDER BY ps.observed_at DESC LIMIT 1
+  ) AS latest_price, (
+    SELECT l.title FROM listings l WHERE l.vehicle_id = v.id ORDER BY l.first_seen_at LIMIT 1
+  ) AS title`;
 /** A `since()` row: the search shape plus the rowid cursor and when the car was first seen. */
 export type FeedRow = ResultRow & { seq: number; first_seen_at: string };
 interface ObservationRow extends SqlRow { baseAmount: number; observedAt: string }
@@ -255,36 +279,25 @@ export class VehicleRepository {
       priceBase: raw.price,
       imageHash,
       powerW: a.powerW ?? null,
+      gearbox: a.gearbox ?? null,
       title: raw.title,
     };
 
+    const mileage = a.mileageKm ?? null;
     const candidates = allRows<CandidateRow>(this.#db.prepare(`
-      SELECT v.*, (
-        SELECT ps.base_amount FROM price_snapshots ps
-        WHERE ps.vehicle_id = v.id ORDER BY ps.observed_at DESC LIMIT 1
-      ) AS latest_price, (
-        SELECT l.title FROM listings l WHERE l.vehicle_id = v.id ORDER BY l.first_seen_at LIMIT 1
-      ) AS title
+      SELECT ${CANDIDATE_COLUMNS}
       FROM vehicles v
       WHERE v.identity_key = ?
          OR (v.image_hash IS NOT NULL AND v.image_hash = ?)
-         -- Same make and the exact same mileage: cheap to look up, and the only
-         -- way two portals that name the model differently ever meet.
-         OR (? IS NOT NULL AND v.mileage_km = ? AND lower(v.make) = lower(?))
-    `), key, imageHash, a.mileageKm ?? null, a.mileageKm ?? null, make);
+         -- Same make and a mileage within the duplicate tolerance: cheap to look
+         -- up, and the only way two portals that name the model differently, or
+         -- round the odometer differently, ever meet.
+         OR (? IS NOT NULL AND v.mileage_km BETWEEN ? AND ? AND lower(v.make) = lower(?))
+    `), key, imageHash, mileage, mileage === null ? null : mileage - ATTRIBUTE_MILEAGE_KM,
+      mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make);
 
     for (const c of candidates) {
-      const existing: MatchInput = {
-        make: c.make, model: c.model,
-        firstRegistration: c.first_registration,
-        mileageKm: c.mileage_km,
-        market: a.market ?? market,
-        sellerName: c.seller_name,
-        priceBase: c.latest_price ?? raw.price,
-        imageHash: c.image_hash,
-        powerW: c.power_w,
-        title: c.title ?? [c.make, c.model, c.variant].filter(Boolean).join(" "),
-      };
+      const existing = toMatchInput(c, a.market ?? market, raw.price);
       if (isSameVehicle(incoming, existing)) {
         this.#fillGaps(c, a, raw, now);
         return { vehicle: toVehicle(this.#require(c.id)), created: false };
@@ -349,6 +362,119 @@ export class VehicleRepository {
     `).run(now, runStartedAt);
 
     return listings;
+  }
+
+  /**
+   * Two vehicles that are one car (see `isDuplicate`) become one, keeping the
+   * lower rowid. The webhook watermark and the public cursor ride on rowid, so
+   * folding an old car into a newer row would announce it a second time.
+   * Merging is the only way a duplicate that was stored before a rule existed
+   * ever disappears: a known advert skips fuzzy matching in `resolve`.
+   */
+  consolidate(): number {
+    const rows = allRows<CandidateRow & { seq: number }>(this.#db.prepare(`
+      SELECT ${CANDIDATE_COLUMNS}
+      FROM vehicles v
+      WHERE ${HIDDEN_EXCLUDED} AND v.mileage_km IS NOT NULL
+    `));
+
+    const byMake = new Map<string, { row: CandidateRow & { seq: number }; input: MatchInput }[]>();
+    for (const row of rows) {
+      const market = toMarket(row.market);
+      if (market === null || row.latest_price === null) continue;
+      const key = row.make.toLowerCase();
+      const group = byMake.get(key) ?? [];
+      group.push({ row, input: toMatchInput(row, market, row.latest_price) });
+      byMake.set(key, group);
+    }
+
+    const parent = new Map<string, string>();
+    const find = (id: string): string => {
+      const up = parent.get(id);
+      if (up === undefined || up === id) return id;
+      const root = find(up);
+      parent.set(id, root);
+      return root;
+    };
+
+    for (const group of byMake.values()) {
+      group.sort((x, y) => (x.row.mileage_km ?? 0) - (y.row.mileage_km ?? 0));
+      for (const [i, a] of group.entries()) {
+        for (const b of group.slice(i + 1)) {
+          if ((b.row.mileage_km ?? 0) - (a.row.mileage_km ?? 0) > ATTRIBUTE_MILEAGE_KM) break;
+          if (isDuplicate(a.input, b.input)) parent.set(find(b.row.id), find(a.row.id));
+        }
+      }
+    }
+
+    const groups = new Map<string, (CandidateRow & { seq: number })[]>();
+    for (const { row } of [...byMake.values()].flat()) {
+      const root = find(row.id);
+      groups.set(root, [...(groups.get(root) ?? []), row]);
+    }
+
+    let merged = 0;
+    for (const members of groups.values()) {
+      if (members.length < 2) continue;
+      members.sort((x, y) => x.seq - y.seq);
+      const [keep, ...rest] = members;
+      if (keep === undefined) continue;
+      for (const drop of rest) {
+        this.mergeInto(keep.id, drop.id);
+        merged += 1;
+      }
+    }
+    return merged;
+  }
+
+  /** Moves every advert and price of `dropId` onto `keepId`, then removes `dropId`. */
+  mergeInto(keepId: string, dropId: string): void {
+    transaction(this.#db, () => {
+      const keep = this.#require(keepId);
+      const drop = this.#require(dropId);
+
+      this.#db.prepare("UPDATE listings SET vehicle_id = ? WHERE vehicle_id = ?").run(keepId, dropId);
+      // A snapshot is keyed by vehicle, instant and source; a clash is the same
+      // observation twice, and the copy left behind goes with the dropped row.
+      this.#db.prepare("UPDATE OR IGNORE price_snapshots SET vehicle_id = ? WHERE vehicle_id = ?")
+        .run(keepId, dropId);
+      if (this.#photoCount(dropId) > this.#photoCount(keepId)) {
+        this.#db.prepare("DELETE FROM photos WHERE vehicle_id = ?").run(keepId);
+        this.#db.prepare("UPDATE photos SET vehicle_id = ? WHERE vehicle_id = ?").run(keepId, dropId);
+      }
+
+      const registration = (drop.first_registration ?? "").length > (keep.first_registration ?? "").length
+        ? drop.first_registration
+        : keep.first_registration;
+      const earliest = (x: string | null, y: string | null): string | null =>
+        x === null ? y : y === null ? x : x < y ? x : y;
+
+      this.#db.prepare(`
+        UPDATE vehicles SET
+          first_registration = ?, variant = ?, body_style = ?, mileage_km = ?, power_w = ?,
+          fuel = ?, gearbox = ?, seller_type = ?, seller_name = ?, postal_code = ?, city = ?,
+          damaged = ?, description = ?, image_hash = ?, detail_fetched_at = ?,
+          first_listed_at = ?, first_seen_at = ?, last_seen_at = ?, delisted_at = ?
+        WHERE id = ?
+      `).run(
+        registration, keep.variant ?? drop.variant, keep.body_style ?? drop.body_style,
+        keep.mileage_km ?? drop.mileage_km, keep.power_w ?? drop.power_w,
+        keep.fuel ?? drop.fuel, keep.gearbox ?? drop.gearbox,
+        keep.seller_type ?? drop.seller_type, keep.seller_name ?? drop.seller_name,
+        keep.postal_code ?? drop.postal_code, keep.city ?? drop.city,
+        keep.damaged ?? drop.damaged, keep.description ?? drop.description,
+        keep.image_hash ?? drop.image_hash, keep.detail_fetched_at ?? drop.detail_fetched_at,
+        earliest(keep.first_listed_at, drop.first_listed_at),
+        earliest(keep.first_seen_at, drop.first_seen_at) ?? keep.first_seen_at,
+        keep.last_seen_at > drop.last_seen_at ? keep.last_seen_at : drop.last_seen_at,
+        // For sale while either advert is.
+        keep.delisted_at === null || drop.delisted_at === null ? null
+          : keep.delisted_at > drop.delisted_at ? keep.delisted_at : drop.delisted_at,
+        keepId,
+      );
+
+      this.#db.prepare("DELETE FROM vehicles WHERE id = ?").run(dropId);
+    });
   }
 
   /** False when no such vehicle exists. Hiding twice keeps the first time. */

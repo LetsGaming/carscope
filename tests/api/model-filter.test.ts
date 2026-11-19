@@ -68,7 +68,7 @@ test("a stored Stagea is not returned for a Skyline search", (t) => {
     vehicles.search(c, true).map((r) => r.model).sort();
 
   assert.deepEqual(models(SEARCH).includes("Stagea"), false);
-  assert.equal(models(SEARCH).length, SKYLINE.length - 1);
+  assert.equal(models(SEARCH).length, R34.length - 1, "four adverts, one of them the same car as another");
   assert.equal(models({ ...EMPTY_CRITERIA, make: "Nissan", model: "R34" }).includes("Stagea"), false);
   assert.equal(models({ ...EMPTY_CRITERIA, text: "Skyline" }).includes("Stagea"), true,
     "without a searched model nothing is checked against the model field");

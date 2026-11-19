@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  identityKey, isCertainMatch, isSameVehicle, matchScore, normaliseName, titleOverlap,
+  identityKey, isAttributeMatch, isCertainMatch, isSameVehicle, matchScore, normaliseName, titleOverlap,
 } from "../../packages/core/src/identity.ts";
 import type { MatchInput } from "../../packages/core/src/identity.ts";
+import { byId } from "../api/skyline-results.ts";
 
 const base: MatchInput = {
   make: "Nissan", model: "Skyline", firstRegistration: "1999-06",
@@ -103,4 +104,61 @@ test("the same mileage at a different price is not the same car", () => {
   };
   assert.equal(isCertainMatch(base, { ...base, priceBase: 29_000 }), false);
   assert.equal(isSameVehicle(base, { ...base, priceBase: 29_000, imageHash: "b" }), false);
+});
+
+const asInput = (id: string): MatchInput => {
+  const { listing } = byId(id);
+  const a = listing.attributes;
+  return {
+    make: a.make ?? "", model: a.model ?? "", firstRegistration: a.firstRegistration ?? null,
+    mileageKm: a.mileageKm ?? null, market: "DE", sellerName: null,
+    priceBase: listing.price, imageHash: null, powerW: a.powerW ?? null,
+    gearbox: a.gearbox ?? null, title: listing.title,
+  };
+};
+
+const VELBERT = "575913a6";
+const VELBERT_ON_AUTOUNCLE = "88bde6f7";
+const RODENBACH = "85c1cad9";
+const HUECKESWAGEN = "b48b8325";
+
+test("one car on two portals, 5 km and one month apart, is one car", () => {
+  const kleinanzeigen = asInput(VELBERT);
+  // Autouncle names it "280 PS": no title words in common, no photos, no seller.
+  const autouncle: MatchInput = { ...asInput(VELBERT_ON_AUTOUNCLE), title: "280 PS" };
+
+  assert.equal(isCertainMatch(kleinanzeigen, autouncle), false, "mileage and month differ");
+  assert.ok(matchScore(kleinanzeigen, autouncle) < 0.72, "scoring alone never reached it");
+  assert.ok(isAttributeMatch(kleinanzeigen, autouncle));
+  assert.ok(isSameVehicle(kleinanzeigen, autouncle));
+});
+
+test("the three different R34s are never merged with each other", () => {
+  const cars = [VELBERT, VELBERT_ON_AUTOUNCLE, RODENBACH, HUECKESWAGEN].map(asInput);
+  const velbert = cars[0];
+  const autouncle = cars[1];
+  const rodenbach = cars[2];
+  const hueckeswagen = cars[3];
+  assert.ok(velbert && autouncle && rodenbach && hueckeswagen);
+
+  for (const [x, y] of [
+    [velbert, rodenbach], [velbert, hueckeswagen], [rodenbach, hueckeswagen],
+    [autouncle, rodenbach], [autouncle, hueckeswagen],
+  ] as const) {
+    assert.equal(isSameVehicle(x, y), false, `${x.firstRegistration ?? ""} vs ${y.firstRegistration ?? ""}`);
+  }
+});
+
+test("the attribute rule needs every attribute, on both sides", () => {
+  const a = asInput(VELBERT);
+  const b = asInput(VELBERT_ON_AUTOUNCLE);
+  assert.ok(isAttributeMatch(a, b));
+  assert.equal(isAttributeMatch(a, { ...b, gearbox: null }), false, "no gearbox is no agreement");
+  assert.equal(isAttributeMatch(a, { ...b, gearbox: "automatic" }), false);
+  assert.equal(isAttributeMatch(a, { ...b, powerW: null }), false);
+  assert.equal(isAttributeMatch(a, { ...b, mileageKm: 90_100 }), false, "350 km apart");
+  assert.equal(isAttributeMatch(a, { ...b, priceBase: 44_900 }), false, "over 1 percent");
+  assert.equal(isAttributeMatch(a, { ...b, firstRegistration: "1999-10" }), false, "four months");
+  assert.equal(isAttributeMatch(a, { ...b, firstRegistration: "1999" }), true, "a bare year fits any month");
+  assert.equal(isAttributeMatch(a, { ...b, firstRegistration: null }), false);
 });

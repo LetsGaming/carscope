@@ -337,7 +337,16 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
     });
     await Promise.all(workers);
 
-    job = { ...job, current: null, finishedAt: now().toISOString(), runs, timedOut };
+    // After the workers, never from one: an abandoned worker can still be
+    // inserting, and a merge must not run under it.
+    try {
+      const merged = app.vehicles.consolidate();
+      if (merged > 0) app.log.info({ merged }, "merged adverts of the same car");
+    } catch (e) {
+      app.log.error({ err: e }, "merging duplicate vehicles failed");
+    }
+
+    job ={ ...job, current: null, finishedAt: now().toISOString(), runs, timedOut };
 
     const pruned = await janitor.prune().catch(() => null);
     if (pruned !== null && pruned.vehiclesPruned > 0) {
