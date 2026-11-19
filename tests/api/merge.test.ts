@@ -120,3 +120,14 @@ test("the source with more pictures wins the gallery", (t) => {
 
   assert.equal(vehicles.findById(thin.vehicle.id)?.photos.length, 3);
 });
+
+test("a tag in front of a title is not taken for the make", (t) => {
+  const vehicles = repo(t);
+  const { vehicle } = vehicles.resolve(listing({
+    title: "[Suche] Nissan Skyline R34 GT-T",
+    attributes: { market: "DE", mileageKm: 200_000 },
+  }), adapter("kleinanzeigen"), null, NOW, "DE");
+
+  assert.equal(vehicle.make, "Nissan");
+  assert.equal(vehicle.model, "Skyline");
+});

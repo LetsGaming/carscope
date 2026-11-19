@@ -114,12 +114,32 @@ export const kleinanzeigen: SourceAdapter = {
       attributes: {
         ...(description === null ? {} : { description }),
         powerW: powerLabelToWatt(/(\d[\d.]*)\s*PS/.exec(text)?.[0]),
-        gearbox: /Automatik/i.test(text) ? "automatic" : /Schaltgetriebe|Manuell/i.test(text) ? "manual" : null,
+        gearbox: gearboxOf(adDetails(body).get("Getriebe")),
         fuel: detailFuel(text),
       },
     });
   },
 };
+
+/**
+ * The "Details" list of an ad page: `<li>Getriebe<span class="...value"> Manuell</span></li>`.
+ * The ad text is the seller's own and says "Klimaautomatik" about the air
+ * conditioning, so the gearbox is read only from here.
+ */
+function adDetails(body: string): Map<string, string> {
+  const details = new Map<string, string>();
+  const item = /<li[^>]*class="addetailslist--detail"[^>]*>([^<]*)<span[^>]*addetailslist--detail--value[^>]*>([^<]*)<\/span>/g;
+  for (const m of body.matchAll(item)) {
+    const label = decodeEntities(m[1] ?? "").trim();
+    if (label !== "") details.set(label, decodeEntities(m[2] ?? "").trim());
+  }
+  return details;
+}
+
+function gearboxOf(value: string | undefined): "automatic" | "manual" | null {
+  if (value === undefined) return null;
+  return /Automatik/i.test(value) ? "automatic" : /Manuell|Schalt/i.test(value) ? "manual" : null;
+}
 
 function detailFuel(text: string): "petrol" | "diesel" | "electric" | "hybrid" | "lpg" | null {
   if (/\bBenzin\b/i.test(text)) return "petrol";

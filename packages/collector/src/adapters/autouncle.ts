@@ -4,7 +4,7 @@ import {
   type RawListing, type RequestSpec, type Result, type SourceAdapter,
 } from "@carscope/core";
 import {
-  blocksBy, decodeEntities, germanNumber, powerLabelToWatt, registrationToIso, visibleText,
+  blocksBy, cleanVariant, decodeEntities, germanNumber, powerLabelToWatt, registrationToIso, visibleText,
 } from "../text.ts";
 import { splitMakeModel } from "./make-model.ts";
 
@@ -106,7 +106,26 @@ export const autoUncle: SourceAdapter = {
    */
   parseDetail(body: string): Result<Partial<RawListing>> {
     const photoUrls = detailPhotos(body);
-    return ok({ ...(photoUrls.length > 0 ? { photoUrls } : {}), attributes: {} });
+    const facts = detailFacts(body);
+    const motor = facts.get("Motor") ?? "";
+    const fuel = FUEL[(/Benzin|Diesel|Elektro|Hybrid|Autogas/i.exec(motor)?.[0] ?? "").toLowerCase()];
+    const gearbox = facts.get("Getriebe");
+    const mileage = germanNumber(facts.get("Km") ?? null);
+    const power = powerLabelToWatt(/\d[\d.]*\s*PS/.exec(motor)?.[0] ?? motor);
+    const registration = monthYear(facts.get("Erstzulassung") ?? null);
+    const bodyStyle = BODY[(facts.get("Ausstattungslinie") ?? "").toLowerCase()];
+    return ok({
+      ...(photoUrls.length > 0 ? { photoUrls } : {}),
+      attributes: {
+        ...(mileage === null ? {} : { mileageKm: mileage }),
+        ...(registration === null ? {} : { firstRegistration: registration }),
+        ...(power === null ? {} : { powerW: power }),
+        ...(fuel === undefined ? {} : { fuel }),
+        ...(bodyStyle === undefined ? {} : { bodyStyle }),
+        ...(gearbox === undefined ? {} : /Automatik/i.test(gearbox) ? { gearbox: "automatic" as const }
+          : /Schalt|Manuell/i.test(gearbox) ? { gearbox: "manual" as const } : {}),
+      },
+    });
   },
 };
 
@@ -117,6 +136,22 @@ export const autoUncle: SourceAdapter = {
  */
 function fullSizeImage(url: string): string {
   return url.replace(/\/medium_/, "/");
+}
+
+/**
+ * "Technische Daten": `<li><span>Km</span><span>86.933</span></li>`. The class
+ * names are hashed and change, so only the shape is read. A card shows these
+ * only partly, and some not at all, so the page is where a bare card is filled.
+ */
+function detailFacts(body: string): Map<string, string> {
+  const facts = new Map<string, string>();
+  const item = /<li[^>]*><span[^>]*>([^<]{2,30})<\/span><span[^>]*>([\s\S]*?)<\/span><\/li>/g;
+  for (const m of body.matchAll(item)) {
+    const label = decodeEntities(m[1] ?? "").trim();
+    const value = visibleText(m[2] ?? "");
+    if (label !== "" && value !== "" && value !== "-" && !facts.has(label)) facts.set(label, value);
+  }
+  return facts;
 }
 
 const CARD_LINK = /href="(\/[a-z]{2}\/d\/(\d+)[^"]*)"/;
@@ -170,7 +205,7 @@ export function domListings(html: string, searchUrl: string): RawListing[] {
     const find = (test: RegExp): string | null => specs.find((v) => test.test(v)) ?? null;
 
     const image = IMAGE.exec(article)?.[1];
-    const variant = decodeEntities(VARIANT.exec(article)?.[1] ?? "").trim();
+    const variant = cleanVariant(decodeEntities(VARIANT.exec(article)?.[1] ?? "")) ?? "";
     const place = PLACE.exec(article);
     const laytime = LAYTIME.exec(flat)?.[1];
 

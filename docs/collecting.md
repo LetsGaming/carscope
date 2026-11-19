@@ -275,6 +275,9 @@ Every built-in adapter implements `parseDetail`, but each fetches only what its
 list page truly cannot answer:
 
 - **Kleinanzeigen**, **mobile.de**: photos and description, as above.
+  Kleinanzeigen also reads the gearbox, and only from the "Details" list of the
+  ad page (`Getriebe: Manuell`). The seller's text is not evidence: it says
+  "Klimaautomatik" about the air conditioning. No entry means unknown.
 - **AutoScout24**: description only, from `#sellerNotesSection`. Its list page
   already names every search result's whole gallery in its `__NEXT_DATA__`
   `images` array, just at thumbnail size (`.../250x188.webp`); the same
@@ -282,7 +285,10 @@ list page truly cannot answer:
   upsizes each URL as a string substitution rather than fetching a detail page
   for a photo it already has the id of. Only the free-text seller notes are
   a real gap.
-- **AutoUncle**: photos, and only the ones the card's own URL cannot reach by
+- **AutoUncle**: the "Technische Daten" list (first registration, mileage,
+  gearbox, engine with power and fuel, body). A card shows some of these and
+  sometimes none, and a bare card could not be matched to its car. Then photos,
+  and only the ones the card's own URL cannot reach by
   the same trick. The card names one photo at `medium_{asset}.webp`; dropping
   that prefix (also a plain substitution, no request) reaches the same
   full-resolution asset the detail page renders — but the *other* photos in

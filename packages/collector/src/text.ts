@@ -83,6 +83,15 @@ export interface Place {
 }
 
 /**
+ * AutoUncle writes an urgency note into the subtitle: "R34 nur noch 2 Tage
+ * online". It is not part of the car's name.
+ */
+export function cleanVariant(text: string | null | undefined): string | null {
+  const variant = (text ?? "").replace(/\b(?:nur\s+)?noch\s+\d+\s+(?:Tage?|Std\.?|Stunden?)\s+online\b/gi, "").replace(/\s+/g, " ").trim();
+  return variant === "" ? null : variant;
+}
+
+/**
  * A town name a geocoder can find. Portals append the posting date ("Velbert
  * Heute,") or a town epithet ("Hückeswagen, Schloss-Stadt"); neither is part of
  * the name, and either makes a map search come back empty.

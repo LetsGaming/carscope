@@ -74,6 +74,17 @@ export type VehicleDetailPatch = Partial<Pick<Vehicle,
   | "sellerName" | "mileageKm" | "firstRegistration" | "bodyStyle"
 >>;
 
+/**
+ * The words of a title, without the tags a seller puts in front: "[Suche] Nissan
+ * Skyline" names a Nissan, not a make called "[Suche]".
+ */
+function nameWords(title: string): string[] {
+  return title
+    .replace(/^(?:\s*(?:\[[^\]]*\]|\([^)]*\))|[^\p{L}\p{N}]+)+/u, "")
+    .split(" ")
+    .filter((w) => w !== "");
+}
+
 const VEHICLE_BY_ID = "SELECT * FROM vehicles WHERE id = ?";
 const SNAPSHOTS_BY_VEHICLE = "SELECT * FROM price_snapshots WHERE vehicle_id = ? ORDER BY observed_at";
 
@@ -275,8 +286,9 @@ export class VehicleRepository {
     // Settled once, on the way in, so one portal shouting does not put the same
     // car in the list twice over in two spellings. The identity key case-folds
     // anyway, so this changes what is read, not what is matched.
-    const make = displayName(a.make ?? raw.title.split(" ")[0] ?? "unknown");
-    const model = displayName(a.model ?? raw.title.split(" ").slice(1, 2).join(" ") ?? "unknown");
+    const named = nameWords(raw.title);
+    const make = displayName(a.make ?? named[0] ?? "unknown");
+    const model = displayName(a.model ?? named.slice(1, 2).join(" ") ?? "unknown");
     const variant = a.variant === undefined || a.variant === null
       ? null
       : displayName(a.variant);
