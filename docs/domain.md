@@ -83,6 +83,15 @@ result list does require every word. A search for "Nissan Skyline R34" therefore
 stores every Skyline the portal returned and lists the ones whose make, model,
 variant or advert title carry all three words.
 
+A car's own model field has the last word. A Stagea advertised as "Skyline
+RB26" mentions the searched word in its title but is not a Skyline, so when the
+search names a model, the collector and the SQL query both require the car's
+model to be one of the searched words or an alias of one (`MODEL_ALIASES` in
+`packages/core/src/criteria.ts`: R32, R33 and R34 are Skylines). A portal with
+no model field is judged by the word after the make in the title. The SQL rule
+needs the `model` field of the criteria; a search typed only as free text is not
+checked against the stored model.
+
 Some search words name a build period rather than a word an advert must carry.
 "R34" is one, and so are E46, W124, Mk4, 993, B7 and every other generation or
 chassis code, in every market. No list of them could be kept complete, so they

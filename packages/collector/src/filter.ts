@@ -1,5 +1,5 @@
 import {
-  CRITERION, matchesText, textTokens, withinRange, wattToPs,
+  CRITERION, matchesText, modelAgrees, modelTerms, textTokens, withinRange, wattToPs,
   type Criteria, type CriterionKey, type RawListing, type SourceAdapter,
 } from "@carscope/core";
 import { splitMakeModel } from "./adapters/make-model.ts";
@@ -34,6 +34,8 @@ export function applyUnsupported(
   // would discard a listing headlined "Nissan Skyline Nismo" for a search that
   // said "Nissan Skyline R34", which is a real car the portal did return.
   const tokens = gaps.has(CRITERION.text) ? textTokens(searchedName(criteria)) : [];
+  const searched = splitMakeModel(criteria);
+  const terms = gaps.has(CRITERION.text) && searched.model !== null ? modelTerms(searched.model) : [];
 
   const kept: RawListing[] = [];
   const dropped: Dropped[] = [];
@@ -47,6 +49,10 @@ export function applyUnsupported(
       if (tokens.length > 0) {
         const haystack = [l.title, a.make, a.model, a.variant].filter(Boolean).join(" ");
         if (!matchesText(haystack, tokens)) { reject(CRITERION.text, haystack); return false; }
+      }
+      if (terms.length > 0) {
+        const listed = a.model ?? modelInTitle(l.title, searched.make);
+        if (!modelAgrees(listed, terms)) { reject(CRITERION.text, `model ${listed ?? ""}`); return false; }
       }
       if (gaps.has(CRITERION.priceEur) && !withinRange(l.price, criteria.priceEur)) {
         reject(CRITERION.priceEur, `${String(l.price)} EUR`); return false;
@@ -85,6 +91,15 @@ export function applyUnsupported(
     if (verdict) kept.push(l);
   }
   return { kept, dropped };
+}
+
+/** Portals without a model field put it right after the make: "Nissan Stagea RS4 ...". */
+function modelInTitle(title: string, make: string | null): string | null {
+  const words = title.split(/\s+/).filter(Boolean);
+  const first = textTokens(make ?? "")[0];
+  if (first === undefined) return null;
+  const at = words.findIndex((w) => textTokens(w)[0] === first);
+  return at === -1 ? null : (words[at + 1] ?? null);
 }
 
 function searchedName(c: Criteria): string {

@@ -128,6 +128,36 @@ export function textTokens(text: string): string[] {
     .filter((t) => t.length > 0);
 }
 
+/**
+ * Names a model is also sold or searched under: the chassis codes of the
+ * Skyline are what buyers type, while portals file the car under "Skyline".
+ */
+export const MODEL_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  skyline: ["r32", "r33", "r34"],
+};
+
+/** The searched model's tokens plus every alias of them, in both directions. */
+export function modelTerms(searchedModel: string): string[] {
+  const terms = new Set(textTokens(searchedModel));
+  for (const term of [...terms]) {
+    for (const alias of MODEL_ALIASES[term] ?? []) terms.add(alias);
+    for (const [name, aliases] of Object.entries(MODEL_ALIASES)) {
+      if (aliases.includes(term)) terms.add(name);
+    }
+  }
+  return [...terms];
+}
+
+/**
+ * A car whose own model field names a different model is not a match, however
+ * often its title mentions the searched one (a Stagea advertised as running
+ * Skyline gear). A missing model decides nothing.
+ */
+export function modelAgrees(listedModel: string | null | undefined, terms: readonly string[]): boolean {
+  if (terms.length === 0 || !listedModel?.trim()) return true;
+  return textTokens(listedModel).some((token) => terms.includes(token));
+}
+
 /** Every token must appear somewhere in the haystack. */
 export function matchesText(haystack: string, tokens: readonly string[]): boolean {
   if (tokens.length === 0) return true;

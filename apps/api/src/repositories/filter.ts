@@ -1,4 +1,4 @@
-import { psToWatt, type Criteria, type Period } from "@carscope/core";
+import { modelTerms, psToWatt, type Criteria, type Period } from "@carscope/core";
 import type { SqlRow } from "../db/index.ts";
 
 export interface ResultRow extends SqlRow {
@@ -67,6 +67,15 @@ export function buildFilter(
       clauses.push(`(${said.sql} OR (${YEAR} BETWEEN ? AND ?))`);
       params.push(...said.params, period.fromYear, period.toYear);
     }
+  }
+
+  // The words above may be met by any listing's title, which lets a car with
+  // another model (a Stagea advertised as Skyline gear) through. The vehicle's
+  // own model has the last word.
+  const terms = c.model ? modelTerms(c.model) : [];
+  if (terms.length > 0) {
+    clauses.push(`(${terms.map(() => "v.model LIKE ? ESCAPE '\\'").join(" OR ")})`);
+    params.push(...terms.map((t) => `%${escapeLike(t)}%`));
   }
 
   const between = (column: string, min: number | null, max: number | null, scale = (n: number): number => n): void => {
