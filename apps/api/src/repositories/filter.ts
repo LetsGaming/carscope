@@ -11,7 +11,7 @@ export interface ResultRow extends SqlRow {
   current_price: number; first_price: number | null;
   price_changes: number; days_listed: number | null;
   photo_count: number; thumb_path: string | null; thumb_url: string | null;
-  first_listed_at: string | null; days_listed_exact: number;
+  first_listed_at: string | null; delisted_at: string | null; days_listed_exact: number;
   sources: string | null; listing_url: string | null;
 }
 

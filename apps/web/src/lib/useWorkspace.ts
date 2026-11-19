@@ -20,6 +20,8 @@ export function useWorkspace() {
   const results = shallowRef<Result[]>([]);
   const market = shallowRef<MarketReport | null>(null);
   const removed = shallowRef<Result | null>(null);
+  /** "all" also lists cars whose adverts have gone offline. */
+  const scope = ref<"active" | "all">("active");
   const loading = ref(false);
   const collecting = ref(false);
   const error: Ref<string | null> = ref(null);
@@ -69,7 +71,7 @@ export function useWorkspace() {
       // so typing while one is in flight cannot change what was asked for.
       const snapshot = copyCriteria(criteria.value);
       const [r, m] = await Promise.all([
-        api.results(snapshot, true),
+        api.results(snapshot, scope.value === "active"),
         api.market(snapshot, DEFAULT_WINDOW_MONTHS),
       ]);
       // A response older than one already applied is discarded, not shown.
@@ -123,6 +125,11 @@ export function useWorkspace() {
     await refresh();
   });
 
+  const setScope = (next: "active" | "all"): Promise<void> => {
+    scope.value = next;
+    return refresh();
+  };
+
   const reset = (): void => {
     activeId.value = null;
     criteria.value = emptyCriteria();
@@ -146,8 +153,8 @@ export function useWorkspace() {
   });
 
   return {
-    searches, activeId, criteria, results, market, removed, loading, collecting,
+    searches, activeId, criteria, results, market, removed, scope, loading, collecting,
     job: progress.job, error,
-    loadSearches, select, refresh, save, remove, hideResult, undoHide, reset, search,
+    loadSearches, select, refresh, save, remove, hideResult, undoHide, setScope, reset, search,
   };
 }

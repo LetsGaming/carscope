@@ -51,3 +51,21 @@ test("a vehicle whose listings really are gone is retired", async (t) => {
   assert.equal((await app.inject({ url: "/api/vehicles?active=false" })).json<unknown[]>().length, 3,
     "and the price history survives the car leaving the market");
 });
+
+test("the all-time list carries when an advert ended, the active list omits it", async (t) => {
+  const app = await build({ config, withScheduler: false });
+  t.after(() => app.close());
+
+  await app.inject({ method: "POST", url: "/api/collect?force=true" });
+  await finish(app);
+  const later = new Date(Date.now() + 60_000).toISOString();
+  app.vehicles.markDelisted("mock", [], later, later);
+
+  type Row = { delistedAt: string | null };
+  const all = (await app.inject({ url: "/api/vehicles?active=false" })).json<Row[]>();
+  assert.equal(all.length, 3);
+  assert.ok(all.every((r) => r.delistedAt === later), "each says when it went offline");
+
+  const live = (await app.inject({ url: "/api/vehicles" })).json<Row[]>();
+  assert.equal(live.length, 0, "the default stays active only");
+});

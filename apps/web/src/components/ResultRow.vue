@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import PhotoFrame from "./PhotoFrame.vue";
-import { eur, num, pct, registration, wattToPs } from "../lib/format";
+import { eur, num, pct, registration, relativeTime, wattToPs } from "../lib/format";
 import type { Result } from "../lib/types";
 
 const props = defineProps<{ result: Result; layout: "list" | "grid" }>();
@@ -25,6 +25,9 @@ const onlineFor = computed(() => {
 });
 const flags = computed(() => {
   const out: { tone: string; text: string }[] = [];
+  if (props.result.delistedAt !== null) {
+    out.push({ tone: "gone", text: `Inserat beendet ${relativeTime(props.result.delistedAt)}` });
+  }
   if (props.result.vsMedian <= -0.05) out.push({ tone: "good", text: "unter Median" });
   if (props.result.vsMedian >= 0.15) out.push({ tone: "warn", text: "deutlich über Median" });
   if (drop.value > 0) out.push({ tone: "good", text: `${props.result.priceChangeCount}× gesenkt` });
@@ -36,7 +39,7 @@ const flags = computed(() => {
 </script>
 
 <template>
-  <article :class="['row', layout]">
+  <article :class="['row', layout, { gone: result.delistedAt !== null }]">
     <RouterLink :to="`/fahrzeug/${result.id}`" class="photo">
       <PhotoFrame :src="result.thumbnail" :seed="result.id" :count="result.photoCount" />
     </RouterLink>
@@ -87,6 +90,7 @@ const flags = computed(() => {
   align-items: start;
 }
 .photo { display: block; text-decoration: none; }
+.row.gone .photo, .row.gone .amount { opacity: .6; }
 .title { margin: 0 0 3px; font-size: 1.0625rem; font-weight: 600; letter-spacing: -.011em; line-height: 1.3; }
 .title a { text-decoration: none; }
 .row:hover .title a { color: var(--accent); }
@@ -100,6 +104,7 @@ const flags = computed(() => {
 .flag { font-size: .75rem; border-radius: 99px; padding: 1px 8px; border: 1px solid var(--line-2); color: var(--ink-2); }
 .flag.good { border-color: var(--under); color: var(--under); }
 .flag.warn { border-color: var(--over); color: var(--over); }
+.flag.gone { background: var(--sunk); color: var(--ink-3); }
 .price { text-align: right; display: grid; gap: 2px; }
 .amount { font-size: 1.375rem; font-weight: 600; letter-spacing: -.02em; }
 .vs, .drop { font-size: .8125rem; }

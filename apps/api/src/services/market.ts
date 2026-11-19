@@ -50,6 +50,8 @@ export interface PricedResult {
   readonly daysListed: number;
   /** False when the figure is only how long we have been watching. */
   readonly daysListedExact: boolean;
+  /** When the last advert for the car went offline; null while it is for sale. */
+  readonly delistedAt: string | null;
   readonly priceChangeCount: number;
   readonly vsMedian: number;
   readonly price: number;
@@ -113,6 +115,7 @@ export class MarketService {
       market: r.market,
       daysListed: Math.max(0, r.days_listed ?? 0),
       daysListedExact: r.days_listed_exact === 1,
+      delistedAt: r.delisted_at,
       priceChangeCount: r.price_changes,
       vsMedian: relativeToMedian(r.current_price, median),
       price: r.current_price,

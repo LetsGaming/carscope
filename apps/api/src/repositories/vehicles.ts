@@ -83,7 +83,7 @@ export class VehicleRepository {
         latest.amount AS current_price,
         earliest.amount AS first_price,
         COALESCE(changes.n, 0) AS price_changes,
-        v.first_listed_at,
+        v.first_listed_at, v.delisted_at,
         CAST(julianday(COALESCE(v.delisted_at, v.last_seen_at))
              - julianday(COALESCE(v.first_listed_at, v.first_seen_at)) AS INTEGER) AS days_listed,
         CASE WHEN v.first_listed_at IS NULL THEN 0 ELSE 1 END AS days_listed_exact,
@@ -126,7 +126,7 @@ export class VehicleRepository {
         v.market, v.city, v.postal_code, v.first_seen_at,
         latest.amount AS current_price,
         NULL AS first_price, 0 AS price_changes,
-        v.first_listed_at,
+        v.first_listed_at, v.delisted_at,
         CAST(julianday(COALESCE(v.delisted_at, v.last_seen_at))
              - julianday(COALESCE(v.first_listed_at, v.first_seen_at)) AS INTEGER) AS days_listed,
         CASE WHEN v.first_listed_at IS NULL THEN 0 ELSE 1 END AS days_listed_exact,

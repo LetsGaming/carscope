@@ -53,6 +53,7 @@ const ResultSchema = Type.Object({
   market: Type.String(),
   daysListed: Type.Integer(),
   daysListedExact: Type.Boolean(),
+  delistedAt: Type.Union([Type.String(), Type.Null()]),
   priceChangeCount: Type.Integer(),
   vsMedian: Type.Number(),
   price: Type.Integer(),

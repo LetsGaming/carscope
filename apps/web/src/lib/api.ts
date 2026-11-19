@@ -71,8 +71,10 @@ export const api = {
   updateSearch: (id: string, name: string, criteria: EditableCriteria): Promise<SavedSearch> =>
     request(`/searches/${id}`, { method: "PUT", body: JSON.stringify({ name, criteria }) }),
   deleteSearch: (id: string): Promise<void> => request(`/searches/${id}`, { method: "DELETE" }),
+  // The server's default is active-only, and queryString leaves out a boolean
+  // false, so the flag travels as text.
   results: (criteria: EditableCriteria, active: boolean): Promise<Result[]> =>
-    request(`/vehicles?${queryString(criteria, { active })}`),
+    request(`/vehicles?${queryString(criteria, { active: String(active) })}`),
   hideVehicle: (id: string): Promise<void> => request(`/vehicles/${id}`, { method: "DELETE" }),
   restoreVehicle: (id: string): Promise<void> =>
     request(`/vehicles/${id}/restore`, { method: "POST" }),

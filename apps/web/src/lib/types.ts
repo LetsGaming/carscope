@@ -58,7 +58,8 @@ export interface Result {
   id: string; make: string; model: string; variant: string | null;
   firstRegistration: string | null; mileageKm: number | null; powerW: number | null;
   gearbox: string | null; city: string | null; market: string;
-  daysListed: number; daysListedExact: boolean; priceChangeCount: number; vsMedian: number;
+  daysListed: number; daysListedExact: boolean; delistedAt: string | null;
+  priceChangeCount: number; vsMedian: number;
   price: number; firstPrice: number;
   photoCount: number; thumbnail: string | null;
   sources: string[]; url: string;

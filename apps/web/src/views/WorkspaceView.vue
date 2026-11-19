@@ -143,6 +143,10 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
           <button role="tab" :aria-selected="tab === 'markt'" @click="tab = 'markt'">Markt</button>
 
           <span class="right" v-if="tab === 'angebote'">
+            <span class="viewsw" role="group" aria-label="Zeitraum">
+              <button :aria-pressed="ws.scope.value === 'active'" @click="ws.setScope('active')">Aktiv</button>
+              <button :aria-pressed="ws.scope.value === 'all'" @click="ws.setScope('all')">Alle (auch beendet)</button>
+            </span>
             <button class="preset" :aria-pressed="onlyBelowMedian" @click="onlyBelowMedian = !onlyBelowMedian">
               Unter Median
             </button>
