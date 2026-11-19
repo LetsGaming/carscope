@@ -1,4 +1,4 @@
-import { modelTerms, psToWatt, type Criteria, type Period } from "@carscope/core";
+import { HOLD, modelTerms, psToWatt, type Criteria, type Period } from "@carscope/core";
 import type { SqlRow } from "../db/index.ts";
 
 export interface ResultRow extends SqlRow {
@@ -8,7 +8,7 @@ export interface ResultRow extends SqlRow {
   fuel: string | null; gearbox: string | null;
   seller_type: string | null; seller_name: string | null;
   market: string; city: string | null; postal_code: string | null;
-  current_price: number; first_price: number | null;
+  current_price: number; first_price: number | null; held_reason: string | null;
   price_changes: number; days_listed: number | null;
   photo_count: number; thumb_path: string | null; thumb_url: string | null;
   first_listed_at: string | null; delisted_at: string | null; days_listed_exact: number;
@@ -23,6 +23,15 @@ export type Param = string | number;
  * clears it whenever the advert is seen again.
  */
 export const HIDDEN_EXCLUDED = "v.hidden_at IS NULL";
+
+/**
+ * A held car is stored but not aggregated: a wanted ad is no car, and a car with
+ * a placeholder price has no price yet. Unlike a hidden car it releases itself.
+ */
+export const HELD_EXCLUDED = "v.held_reason IS NULL";
+
+/** A wanted ad never takes part in matching: it describes a search, not a car. */
+export const NOT_WANTED = `(v.held_reason IS NULL OR v.held_reason <> '${HOLD.wanted}')`;
 
 const YEAR ="CAST(substr(v.first_registration, 1, 4) AS INTEGER)";
 
@@ -54,8 +63,9 @@ export function buildFilter(
   c: Criteria,
   activeOnly: boolean,
   periods: readonly Period[] = [],
+  held = false,
 ): { where: string; params: Param[] } {
-  const clauses: string[] = [HIDDEN_EXCLUDED];
+  const clauses: string[] = [HIDDEN_EXCLUDED, held ? "v.held_reason IS NOT NULL" : HELD_EXCLUDED];
   const params: Param[] = [];
 
   if (activeOnly) clauses.push("v.delisted_at IS NULL");

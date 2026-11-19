@@ -340,6 +340,8 @@ export default fp(async function collector(app: FastifyInstance, opts: { config:
     // After the workers, never from one: an abandoned worker can still be
     // inserting, and a merge must not run under it.
     try {
+      const reassessed = app.vehicles.reassessAll();
+      if (reassessed > 0) app.log.info({ reassessed }, "held or released cars");
       const merged = app.vehicles.consolidate();
       if (merged > 0) app.log.info({ merged }, "merged adverts of the same car");
     } catch (e) {

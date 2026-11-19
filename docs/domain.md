@@ -161,6 +161,27 @@ moves the listings and price snapshots over. Hidden cars are not merged. Photos
 of an advert that was still being fetched while its vehicle was merged can fail
 to save; the next run repeats them.
 
+## Held listings
+
+Some adverts are not cars for sale. They are stored, because the next run has
+to recognise them, but they are held: left out of lists, statistics, the feed and
+webhooks. `holdReason` in `packages/core/src/hold.ts` decides, and it decides
+again after every price and every detail page, so a hold lifts itself.
+
+- **wanted:** a buyer's advert. A title or URL slug that starts with "Suche",
+  "Gesuch" or "Ankauf", or a description that says "suche" within 40 characters
+  of the car's name. "Suche neuen Besitzer" and "suche keinen Tausch" are
+  sellers. A wanted ad never takes part in duplicate matching. Its km and
+  registration are the buyer's limits, not a car's.
+- **placeholder_price:** under 100 EUR (Kleinanzeigen shows "VB" as 1 EUR), or a
+  description that calls the price a placeholder. Digit patterns such as 44444
+  decide nothing: that is a price some sellers choose on purpose. The car is
+  listed as soon as it reports a real price.
+
+A person can overrule either with "Freigeben" on the held list. The car then
+stays listed whatever the rules say. A car released later is not announced to
+webhooks (see the cursor note in `http-api.md`).
+
 ## Delisting
 
 A vehicle is retired when none of its listings are live any more. Two details

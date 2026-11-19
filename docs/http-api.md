@@ -15,11 +15,12 @@ schema is the validator, the serialiser and the handler's types at once.
 | `POST` | `/api/searches/:id/collect` | 202, the started job |
 | `GET` | `/api/searches/:id/vehicles` | Results for a saved search |
 | `GET` | `/api/searches/:id/market` | Report for a saved search |
-| `GET` | `/api/vehicles` | Results for criteria on the query string |
+| `GET` | `/api/vehicles` | Results for criteria on the query string. `?active=false` adds ended adverts, `?held=true` lists the held cars instead |
 | `GET` | `/api/vehicles/:id` | One vehicle with prices, photos and listings |
 | `GET` | `/api/vehicles/:id/prices` | Price history |
 | `DELETE` | `/api/vehicles/:id` | Hide a car by hand (204). Survives re-scrapes |
 | `POST` | `/api/vehicles/:id/restore` | Undo a hide (204) |
+| `POST` | `/api/vehicles/:id/release` | Overrule a hold: this car is real and stays listed (204) |
 | `GET` | `/api/market` | Distribution, monthly series, bands, factors |
 | `POST` | `/api/collect` | 202, starts a run for ad-hoc criteria |
 | `GET` | `/api/collect` | The current job, or `null` |
@@ -190,7 +191,7 @@ reason; a plain timestamp filter would need the same guarantee and cannot give i
 
 `API_KEYS_REQUIRED` (default `false`) decides whether the write endpoints
 (`POST`/`PUT`/`DELETE /api/searches*`, `DELETE /api/vehicles/:id`,
-`POST /api/vehicles/:id/restore`, `POST /api/collect`,
+`POST /api/vehicles/:id/restore`, `POST /api/vehicles/:id/release`, `POST /api/collect`,
 `PATCH /api/sources/:id`, all of `/api/webhooks`) require a key. With it unset,
 nothing here changes from before — the bundled SPA and every existing script
 keep working on a trusted network exactly as they did.
@@ -250,3 +251,10 @@ misleading 500.
 Exposing it publicly still needs an authenticating proxy in front if you want
 more than the public namespace reachable, and the write endpoints should stay
 behind `API_KEYS_REQUIRED=true` once they are internet-facing.
+
+## Held cars and the cursor
+
+A held car (wanted ad, placeholder price) is stored but left out of every list,
+statistic, feed and webhook. The public cursor and the webhook watermark read
+`vehicles.rowid`. A car that is released later keeps its old rowid, so it is
+not announced as new: it appears in lists, but no webhook fires for it.

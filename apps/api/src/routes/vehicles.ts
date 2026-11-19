@@ -77,6 +77,15 @@ const vehicles: FastifyPluginAsyncTypebox = async (app) => {
     return null;
   });
 
+  app.post("/:id/release", {
+    schema: { params: IdParams, response: { 204: Type.Null(), 404: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
+  }, async (req, reply) => {
+    if (!app.vehicles.release(req.params.id, new Date().toISOString())) throw new NotFound("vehicle");
+    reply.code(204);
+    return null;
+  });
+
   app.get("/:id/prices", {
     schema: { params: IdParams, response: { 200: Type.Array(PriceSchema), 404: ErrorSchema } },
   }, async (req) => {

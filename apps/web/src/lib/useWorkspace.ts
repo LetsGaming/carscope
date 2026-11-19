@@ -20,6 +20,9 @@ export function useWorkspace() {
   const results = shallowRef<Result[]>([]);
   const market = shallowRef<MarketReport | null>(null);
   const removed = shallowRef<Result | null>(null);
+  /** Wanted ads and placeholder prices, kept out of the list. Loaded when asked for. */
+  const heldResults = shallowRef<Result[]>([]);
+  const showHeld = ref(false);
   /** "all" also lists cars whose adverts have gone offline. */
   const scope = ref<"active" | "all">("active");
   const loading = ref(false);
@@ -125,6 +128,21 @@ export function useWorkspace() {
     await refresh();
   });
 
+  const loadHeld = (): Promise<void> => guard(async () => {
+    heldResults.value = await api.results(copyCriteria(criteria.value), true, true);
+  });
+
+  const toggleHeld = async (): Promise<void> => {
+    showHeld.value = !showHeld.value;
+    if (showHeld.value) await loadHeld();
+  };
+
+  /** The rules were wrong about this one: it is a real listing. */
+  const releaseHeld = (id: string): Promise<void> => guard(async () => {
+    await api.releaseVehicle(id);
+    await Promise.all([refresh(), loadHeld()]);
+  });
+
   const setScope = (next: "active" | "all"): Promise<void> => {
     scope.value = next;
     return refresh();
@@ -153,8 +171,9 @@ export function useWorkspace() {
   });
 
   return {
-    searches, activeId, criteria, results, market, removed, scope, loading, collecting,
+    searches, activeId, criteria, results, market, removed, scope, heldResults, showHeld,
+    loading, collecting,
     job: progress.job, error,
-    loadSearches, select, refresh, save, remove, hideResult, undoHide, setScope, reset, search,
+    loadSearches, select, refresh, save, remove, hideResult, undoHide, setScope, toggleHeld, releaseHeld, reset, search,
   };
 }

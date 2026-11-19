@@ -5,6 +5,7 @@ import SearchRail from "../components/SearchRail.vue";
 import SourcePanel from "../components/SourcePanel.vue";
 import ApiKeyField from "../components/ApiKeyField.vue";
 import ResultRow from "../components/ResultRow.vue";
+import HeldList from "../components/HeldList.vue";
 import MarketPane from "../components/MarketPane.vue";
 import { useWorkspace } from "../lib/useWorkspace";
 import { useApiKey } from "../lib/useApiKey";
@@ -39,6 +40,9 @@ const counts = computed(() =>
 
 /** Stored for this search but filtered out by the words in the search box. */
 const excluded = computed(() => ws.market.value?.excludedByText ?? 0);
+
+/** Wanted ads and placeholder prices: stored, but not counted as listings. */
+const held = computed(() => ws.market.value?.heldCount ?? 0);
 
 /** Words the query read as a build period rather than as a word to look for. */
 const periods = computed(() => ws.market.value?.periods ?? []);
@@ -209,6 +213,14 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
             „{{ p.token.toUpperCase() }}“ wird als Baujahrsspanne {{ p.fromYear }}–{{ p.toYear }} gelesen.
             Fahrzeuge aus diesen Jahren zählen mit, auch wenn die Anzeige das Wort nicht nennt.
           </p>
+          <p v-if="held > 0" class="excluded">
+            {{ held }} {{ held === 1 ? "Anzeige" : "Anzeigen" }} zurückgehalten (Gesuche, Platzhalterpreise).
+            Sie zählen nicht mit, bis ein echter Preis bekannt ist.
+            <button type="button" class="link" @click="ws.toggleHeld">
+              {{ ws.showHeld.value ? "Ausblenden" : "Anzeigen" }}
+            </button>
+          </p>
+          <HeldList v-if="ws.showHeld.value" :results="ws.heldResults.value" @release="ws.releaseHeld" />
           <p v-if="excluded > 0" class="excluded">
             {{ excluded }} weitere gespeicherte {{ excluded === 1 ? "Anzeige passt" : "Anzeigen passen" }}
             nicht zum Suchtext „{{ ws.criteria.value.text }}“.
@@ -269,7 +281,7 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
   margin: 0; padding: var(--s2) var(--s5); display: flex; gap: var(--s3); align-items: center;
   background: var(--sunk); font-size: .8125rem; color: var(--ink-2);
 }
-.undo button { color: var(--accent); text-decoration: underline; }
+.undo button, .link { color: var(--accent); text-decoration: underline; }
 .list { padding: var(--s2) var(--s5) var(--s6); }
 .grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));

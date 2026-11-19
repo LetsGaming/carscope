@@ -65,4 +65,5 @@ test("removing or restoring an unknown car is a 404", async (t) => {
   const app = await collected(t);
   assert.equal((await app.inject({ method: "DELETE", url: "/api/vehicles/nope" })).statusCode, 404);
   assert.equal((await app.inject({ method: "POST", url: "/api/vehicles/nope/restore" })).statusCode, 404);
+  assert.equal((await app.inject({ method: "POST", url: "/api/vehicles/nope/release" })).statusCode, 404);
 });

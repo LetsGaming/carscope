@@ -28,6 +28,8 @@ export interface MarketReport {
    * collected, 19 shown, and nothing saying why.
    */
   readonly excludedByText: number;
+  /** Stored cars matching the search that are held back: wanted ads, placeholder prices. */
+  readonly heldCount: number;
   /**
    * Search words read as a production period rather than as a word the advert
    * must contain. Reported so the reader can see why a car without the word is
@@ -52,6 +54,8 @@ export interface PricedResult {
   readonly daysListedExact: boolean;
   /** When the last advert for the car went offline; null while it is for sale. */
   readonly delistedAt: string | null;
+  /** Why the car is held back, when this list is the held one. */
+  readonly heldReason: string | null;
   readonly priceChangeCount: number;
   readonly vsMedian: number;
   readonly price: number;
@@ -95,12 +99,13 @@ export class MarketService {
       activeCount: active.length,
       observationCount: observations.length,
       excludedByText: Math.max(0, withoutText - active.length),
+      heldCount: this.#vehicles.search(criteria, true, true).length,
       periods: this.#vehicles.periods(criteria, true),
     };
   }
 
-  priced(criteria: Criteria, activeOnly: boolean): PricedResult[] {
-    const rows = this.#vehicles.search(criteria, activeOnly);
+  priced(criteria: Criteria, activeOnly: boolean, held = false): PricedResult[] {
+    const rows = this.#vehicles.search(criteria, activeOnly, held);
     const median = describe(rows.map((r) => r.current_price).filter((p) => p > 0)).p50;
     return rows.map((r) => ({
       id: r.id,
@@ -116,6 +121,7 @@ export class MarketService {
       daysListed: Math.max(0, r.days_listed ?? 0),
       daysListedExact: r.days_listed_exact === 1,
       delistedAt: r.delisted_at,
+      heldReason: r.held_reason,
       priceChangeCount: r.price_changes,
       vsMedian: relativeToMedian(r.current_price, median),
       price: r.current_price,

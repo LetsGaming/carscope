@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
   ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
-  isDuplicate, isSameVehicle, toMarket,
+  holdReason, isDuplicate, isSameVehicle, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
   type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
 } from "@carscope/core";
 import type { ResolvedVehicle } from "@carscope/collector";
 import { allRows, changed, getRow, transaction, type Db, type SqlRow } from "../db/index.ts";
-import { buildFilter, HIDDEN_EXCLUDED, searchWords, textClause, type Param, type ResultRow } from "./filter.ts";
+import { buildFilter, HELD_EXCLUDED, HIDDEN_EXCLUDED, NOT_WANTED, searchWords, textClause, type Param, type ResultRow } from "./filter.ts";
 import {
   toListing, toPhoto, toSnapshot, toVehicle,
   type ListingRow, type PhotoRow, type SnapshotRow, type VehicleRow,
@@ -44,6 +44,12 @@ interface ObservationRow extends SqlRow { baseAmount: number; observedAt: string
 interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; photos: number }
 interface ListingOwnerRow extends SqlRow { vehicle_id: string }
 interface CountRow extends SqlRow { n: number }
+interface IdRow extends SqlRow { id: string }
+interface HoldListingRow extends SqlRow { title: string; url: string }
+interface HoldRow extends SqlRow {
+  make: string; model: string; description: string | null;
+  held_reason: string | null; held_released_at: string | null; price: number | null;
+}
 interface EvidenceRow extends SqlRow {
   with_token: number | null; with_from: number | null; with_to: number | null;
   total: number; total_from: number | null; total_to: number | null;
@@ -81,8 +87,10 @@ export class VehicleRepository {
    * saved search collected them. Saving a search schedules collection; it is not
    * a precondition for looking at what is already there.
    */
-  search(criteria: Criteria, activeOnly: boolean): ResultRow[] {
-    const { where, params } = buildFilter(criteria, activeOnly, this.periods(criteria, activeOnly));
+  search(criteria: Criteria, activeOnly: boolean, held = false): ResultRow[] {
+    const { where, params } = buildFilter(
+      criteria, activeOnly, held ? [] : this.periods(criteria, activeOnly), held,
+    );
     return allRows<ResultRow>(this.#db.prepare(`
       WITH latest AS (
         SELECT vehicle_id, base_amount AS amount, MAX(observed_at) AS at
@@ -103,7 +111,7 @@ export class VehicleRepository {
       SELECT
         v.id, v.make, v.model, v.variant, v.body_style, v.first_registration,
         v.mileage_km, v.power_w, v.fuel, v.gearbox, v.seller_type, v.seller_name,
-        v.market, v.city, v.postal_code,
+        v.market, v.city, v.postal_code, v.held_reason, v.held_reason,
         latest.amount AS current_price,
         earliest.amount AS first_price,
         COALESCE(changes.n, 0) AS price_changes,
@@ -176,9 +184,10 @@ export class VehicleRepository {
       SELECT ps.base_amount AS baseAmount, ps.observed_at AS observedAt
       FROM price_snapshots ps
       JOIN vehicles v ON v.id = ps.vehicle_id
-      WHERE ${where.replaceAll("latest.amount", "ps.base_amount")} AND ps.observed_at >= ?
+      WHERE ${where.replaceAll("latest.amount", "ps.base_amount")}
+        AND ps.observed_at >= ? AND ps.base_amount >= ?
       ORDER BY ps.observed_at
-    `), ...params, sinceIso);
+    `), ...params, sinceIso, PLACEHOLDER_PRICE_BELOW_EUR);
   }
 
 /**
@@ -223,6 +232,7 @@ export class VehicleRepository {
       attributes.mileageKm ?? null, attributes.firstRegistration ?? null,
       attributes.bodyStyle ?? null, vehicleId,
     );
+    this.#reassess(vehicleId);
   }
 
   priceHistory(vehicleId: string): PriceSnapshot[] {
@@ -287,12 +297,12 @@ export class VehicleRepository {
     const candidates = allRows<CandidateRow>(this.#db.prepare(`
       SELECT ${CANDIDATE_COLUMNS}
       FROM vehicles v
-      WHERE v.identity_key = ?
+      WHERE ${NOT_WANTED} AND (v.identity_key = ?
          OR (v.image_hash IS NOT NULL AND v.image_hash = ?)
          -- Same make and a mileage within the duplicate tolerance: cheap to look
          -- up, and the only way two portals that name the model differently, or
          -- round the odometer differently, ever meet.
-         OR (? IS NOT NULL AND v.mileage_km BETWEEN ? AND ? AND lower(v.make) = lower(?))
+         OR (? IS NOT NULL AND v.mileage_km BETWEEN ? AND ? AND lower(v.make) = lower(?)))
     `), key, imageHash, mileage, mileage === null ? null : mileage - ATTRIBUTE_MILEAGE_KM,
       mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make);
 
@@ -336,6 +346,7 @@ export class VehicleRepository {
       randomUUID(), vehicleId, adapter.id,
       raw.sourceListingId, raw.url, raw.title, now, now,
     );
+    this.#reassess(vehicleId);
   }
 
   recordPrice(s: PriceSnapshot): void {
@@ -343,6 +354,7 @@ export class VehicleRepository {
       INSERT INTO price_snapshots (vehicle_id, observed_at, source_id, amount, currency, base_amount, rate)
       VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING
     `).run(s.vehicleId, s.observedAt, s.sourceId, s.amount, s.currency, s.baseAmount, s.rate);
+    this.#reassess(s.vehicleId);
   }
 
   markDelisted(sourceId: string, seenIds: readonly string[], now: string, runStartedAt: string): number {
@@ -375,7 +387,7 @@ export class VehicleRepository {
     const rows = allRows<CandidateRow & { seq: number }>(this.#db.prepare(`
       SELECT ${CANDIDATE_COLUMNS}
       FROM vehicles v
-      WHERE ${HIDDEN_EXCLUDED} AND v.mileage_km IS NOT NULL
+      WHERE ${HIDDEN_EXCLUDED} AND ${NOT_WANTED} AND v.mileage_km IS NOT NULL
     `));
 
     const byMake = new Map<string, { row: CandidateRow & { seq: number }; input: MatchInput }[]>();
@@ -477,6 +489,49 @@ export class VehicleRepository {
     });
   }
 
+  /**
+   * Decides again, from everything known now, whether a car is held. Called after
+   * every write that can change the answer, so a car whose seller fixes the
+   * price is released by the next run, and one released by hand stays released.
+   */
+  #reassess(vehicleId: string): boolean {
+    const row = getRow<HoldRow>(this.#db.prepare(`
+      SELECT v.make, v.model, v.description, v.held_reason, v.held_released_at,
+        (SELECT ps.base_amount FROM price_snapshots ps
+         WHERE ps.vehicle_id = v.id ORDER BY ps.observed_at DESC LIMIT 1) AS price
+      FROM vehicles v WHERE v.id = ?
+    `), vehicleId);
+    if (row === undefined) return false;
+
+    const listings = allRows<HoldListingRow>(this.#db.prepare(
+      "SELECT title, url FROM listings WHERE vehicle_id = ?",
+    ), vehicleId);
+    const reason = row.held_released_at !== null ? null : holdReason({
+      titles: listings.map((l) => l.title), urls: listings.map((l) => l.url),
+      description: row.description, make: row.make, model: row.model, priceBase: row.price,
+    });
+    if (reason === row.held_reason) return false;
+
+    this.#db.prepare("UPDATE vehicles SET held_reason = ? WHERE id = ?").run(reason, vehicleId);
+    return true;
+  }
+
+  /** The backfill for cars stored before a rule existed. Returns how many changed. */
+  reassessAll(): number {
+    let changedCount = 0;
+    for (const { id } of allRows<IdRow>(this.#db.prepare("SELECT id FROM vehicles"))) {
+      if (this.#reassess(id)) changedCount += 1;
+    }
+    return changedCount;
+  }
+
+  /** The reader overrules the rules: this car is real, and stays listed. */
+  release(id: string, now: string): boolean {
+    return changed(this.#db.prepare(
+      "UPDATE vehicles SET held_reason = NULL, held_released_at = ? WHERE id = ?",
+    ).run(now, id)) > 0;
+  }
+
   /** False when no such vehicle exists. Hiding twice keeps the first time. */
   hide(id: string, now: string): boolean {
     return changed(this.#db.prepare(
@@ -533,7 +588,7 @@ export class VehicleRepository {
     activeOnly: boolean,
   ): PeriodEvidence | null {
     const said = textClause(word);
-    const clauses: string[] = ["v.first_registration IS NOT NULL", HIDDEN_EXCLUDED];
+    const clauses: string[] = ["v.first_registration IS NOT NULL", HIDDEN_EXCLUDED, HELD_EXCLUDED];
     const params: Param[] = [];
 
     if (activeOnly) clauses.push("v.delisted_at IS NULL");

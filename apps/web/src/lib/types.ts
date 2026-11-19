@@ -59,6 +59,7 @@ export interface Result {
   firstRegistration: string | null; mileageKm: number | null; powerW: number | null;
   gearbox: string | null; city: string | null; market: string;
   daysListed: number; daysListedExact: boolean; delistedAt: string | null;
+  heldReason: string | null;
   priceChangeCount: number; vsMedian: number;
   price: number; firstPrice: number;
   photoCount: number; thumbnail: string | null;
@@ -82,6 +83,7 @@ export interface MarketReport {
   activeCount: number;
   observationCount: number;
   excludedByText: number;
+  heldCount: number;
   periods: { token: string; fromYear: number; toYear: number }[];
 }
 

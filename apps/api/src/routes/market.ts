@@ -35,6 +35,7 @@ const MarketSchema = Type.Object({
   activeCount: Type.Integer(),
   observationCount: Type.Integer(),
   excludedByText: Type.Integer(),
+  heldCount: Type.Integer(),
   periods: Type.Array(Type.Object({
     token: Type.String(),
     fromYear: Type.Integer(),
@@ -54,6 +55,7 @@ const ResultSchema = Type.Object({
   daysListed: Type.Integer(),
   daysListedExact: Type.Boolean(),
   delistedAt: Type.Union([Type.String(), Type.Null()]),
+  heldReason: Type.Union([Type.String(), Type.Null()]),
   priceChangeCount: Type.Integer(),
   vsMedian: Type.Number(),
   price: Type.Integer(),
@@ -80,6 +82,7 @@ const CriteriaQuery = Type.Object({
   markets: field, postalCode: field, radiusKm: field,
   excludeDamaged: field,
   active: field,
+  held: field,
   months: field,
   force: field,
 });
@@ -203,7 +206,7 @@ const market: FastifyPluginAsyncTypebox = async (app) => {
     schema: { querystring: CriteriaQuery, response: { 200: Type.Array(ResultSchema), 400: ErrorSchema } },
   }, async (req) => {
     const criteria = criteriaFromQuery(req.query);
-    return app.market.priced(criteria, flag(req.query.active, true)).map(toDto);
+    return app.market.priced(criteria, flag(req.query.active, true), flag(req.query.held, false)).map(toDto);
   });
 
   app.get("/market", {
