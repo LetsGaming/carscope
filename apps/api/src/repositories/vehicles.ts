@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
-  holdReason, isDuplicate, isSameVehicle, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
+  holdReason, isDuplicate, isSameVehicle, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
   type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
@@ -14,7 +14,10 @@ import {
   type ListingRow, type PhotoRow, type SnapshotRow, type VehicleRow,
 } from "./rows.ts";
 
-type CandidateRow = VehicleRow & { latest_price: number | null; title: string | null };
+type CandidateRow = VehicleRow & { latest_price: number | null; title: string | null; titles: string | null };
+
+/** Never part of a listing title, so it can separate the titles of one car. */
+const TITLE_SEPARATOR = String.fromCharCode(31);
 
 function toMatchInput(c: CandidateRow, market: Market, fallbackPrice: number): MatchInput {
   return {
@@ -28,6 +31,9 @@ function toMatchInput(c: CandidateRow, market: Market, fallbackPrice: number): M
     powerW: c.power_w,
     gearbox: c.gearbox,
     title: c.title ?? [c.make, c.model, c.variant].filter(Boolean).join(" "),
+    city: c.city,
+    sellerType: c.seller_type,
+    ...(c.titles === null ? {} : { titles: c.titles.split(TITLE_SEPARATOR) }),
   };
 }
 
@@ -37,7 +43,9 @@ const CANDIDATE_COLUMNS = `
     WHERE ps.vehicle_id = v.id ORDER BY ps.observed_at DESC LIMIT 1
   ) AS latest_price, (
     SELECT l.title FROM listings l WHERE l.vehicle_id = v.id ORDER BY l.first_seen_at LIMIT 1
-  ) AS title`;
+  ) AS title, (
+    SELECT group_concat(l.title, char(31)) FROM listings l WHERE l.vehicle_id = v.id
+  ) AS titles`;
 /** A `since()` row: the search shape plus the rowid cursor and when the car was first seen. */
 export type FeedRow = ResultRow & { seq: number; first_seen_at: string };
 interface ObservationRow extends SqlRow { baseAmount: number; observedAt: string }
@@ -291,6 +299,9 @@ export class VehicleRepository {
       powerW: a.powerW ?? null,
       gearbox: a.gearbox ?? null,
       title: raw.title,
+      city: a.city ?? null,
+      sellerType: a.sellerType ?? null,
+      titles: [raw.title],
     };
 
     const mileage = a.mileageKm ?? null;
@@ -302,9 +313,12 @@ export class VehicleRepository {
          -- Same make and a mileage within the duplicate tolerance: cheap to look
          -- up, and the only way two portals that name the model differently, or
          -- round the odometer differently, ever meet.
-         OR (? IS NOT NULL AND v.mileage_km BETWEEN ? AND ? AND lower(v.make) = lower(?)))
+         OR (? IS NOT NULL AND v.mileage_km BETWEEN ? AND ? AND lower(v.make) = lower(?))
+         -- A re-posted advert keeps its town but not its price or odometer, and a
+         -- sparse card keeps nothing else.
+         OR (? IS NOT NULL AND v.city = ? AND lower(v.make) = lower(?)))
     `), key, imageHash, mileage, mileage === null ? null : mileage - ATTRIBUTE_MILEAGE_KM,
-      mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make);
+      mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make, a.city ?? null, a.city ?? null, make);
 
     for (const c of candidates) {
       const existing = toMatchInput(c, a.market ?? market, raw.price);
@@ -387,7 +401,7 @@ export class VehicleRepository {
     const rows = allRows<CandidateRow & { seq: number }>(this.#db.prepare(`
       SELECT ${CANDIDATE_COLUMNS}
       FROM vehicles v
-      WHERE ${HIDDEN_EXCLUDED} AND ${NOT_WANTED} AND v.mileage_km IS NOT NULL
+      WHERE ${HIDDEN_EXCLUDED} AND ${NOT_WANTED}
     `));
 
     const byMake = new Map<string, { row: CandidateRow & { seq: number }; input: MatchInput }[]>();
@@ -409,13 +423,32 @@ export class VehicleRepository {
       return root;
     };
 
+    const meet = (a: { row: CandidateRow; input: MatchInput }, b: { row: CandidateRow; input: MatchInput }): void => {
+      if (isDuplicate(a.input, b.input)) parent.set(find(b.row.id), find(a.row.id));
+    };
+
     for (const group of byMake.values()) {
-      group.sort((x, y) => (x.row.mileage_km ?? 0) - (y.row.mileage_km ?? 0));
-      for (const [i, a] of group.entries()) {
-        for (const b of group.slice(i + 1)) {
-          if ((b.row.mileage_km ?? 0) - (a.row.mileage_km ?? 0) > ATTRIBUTE_MILEAGE_KM) break;
-          if (isDuplicate(a.input, b.input)) parent.set(find(b.row.id), find(a.row.id));
+      // By odometer: only cars whose mileage is close enough for any rule to apply.
+      const driven = group
+        .filter((x) => x.row.mileage_km !== null)
+        .sort((x, y) => (x.row.mileage_km ?? 0) - (y.row.mileage_km ?? 0));
+      for (const [i, a] of driven.entries()) {
+        for (const b of driven.slice(i + 1)) {
+          const high = b.row.mileage_km ?? 0;
+          if (high - (a.row.mileage_km ?? 0) > high * PLACE_MILEAGE_SHARE) break;
+          meet(a, b);
         }
+      }
+
+      // By town: the rules for re-posted and sparse adverts need no odometer.
+      const towns = new Map<string, typeof group>();
+      for (const x of group) {
+        if (!x.row.city) continue;
+        const key = x.row.city.toLowerCase();
+        towns.set(key, [...(towns.get(key) ?? []), x]);
+      }
+      for (const inTown of towns.values()) {
+        for (const [i, a] of inTown.entries()) for (const b of inTown.slice(i + 1)) meet(a, b);
       }
     }
 

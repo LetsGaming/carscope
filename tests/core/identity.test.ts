@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  identityKey, isAttributeMatch, isCertainMatch, isSameVehicle, matchScore, normaliseName, titleOverlap,
+  identityKey, isAttributeMatch, isCertainMatch, isSameVehicle, isSamePlaceMatch, isSparseMatch, matchScore, normaliseName, titleOverlap,
 } from "../../packages/core/src/identity.ts";
 import type { MatchInput } from "../../packages/core/src/identity.ts";
 import { byId } from "../api/skyline-results.ts";
+import { HELD_IDS, PROD, SAME_CAR, type ProdRow } from "../api/prod-skyline.ts";
 
 const base: MatchInput = {
   make: "Nissan", model: "Skyline", firstRegistration: "1999-06",
@@ -161,4 +162,73 @@ test("the attribute rule needs every attribute, on both sides", () => {
   assert.equal(isAttributeMatch(a, { ...b, firstRegistration: "1999-10" }), false, "four months");
   assert.equal(isAttributeMatch(a, { ...b, firstRegistration: "1999" }), true, "a bare year fits any month");
   assert.equal(isAttributeMatch(a, { ...b, firstRegistration: null }), false);
+});
+
+const prodInput = (row: ProdRow): MatchInput => ({
+  make: row.make, model: row.model, firstRegistration: row.reg, mileageKm: row.km,
+  market: "DE", sellerName: null, priceBase: row.price, imageHash: null, powerW: row.powerW,
+  gearbox: row.gearbox, title: row.titles[0] ?? "", titles: row.titles,
+  city: row.city, sellerType: row.sellerType,
+});
+
+const pairKey = (a: string, b: string): string => [a, b].sort().join("+");
+
+test("on the prod snapshot, exactly the three known pairs are one car", () => {
+  const cars = PROD.filter((r) => !HELD_IDS.some((id) => id === r.id));
+  const found: string[] = [];
+  for (const [i, a] of cars.entries()) {
+    for (const b of cars.slice(i + 1)) {
+      if (isSameVehicle(prodInput(a), prodInput(b))) found.push(pairKey(a.id, b.id));
+    }
+  }
+  assert.deepEqual(found.sort(), SAME_CAR.map(([a, b]) => pairKey(a, b)).sort());
+});
+
+test("a reposted advert keeps its town, loses nothing but price and a corrected odometer", () => {
+  const first = PROD.find((r) => r.id === "14195382");
+  const second = PROD.find((r) => r.id === "b48b8325");
+  assert.ok(first && second);
+  const a = prodInput(first);
+  const b = prodInput(second);
+
+  assert.equal(isAttributeMatch(a, b), false, "price and gearbox rule it out");
+  assert.ok(isSamePlaceMatch(a, b));
+  assert.equal(isSamePlaceMatch(a, { ...b, city: "Wipperfürth" }), false, "another town");
+  assert.equal(isSamePlaceMatch(a, { ...b, city: null }), false, "no town known");
+  assert.equal(isSamePlaceMatch({ ...a, sellerType: "dealer" }, b), false, "a dealer holds several cars");
+  assert.equal(isSamePlaceMatch(a, { ...b, mileageKm: 195_000 }), false, "mileage over 5 percent");
+  assert.equal(isSamePlaceMatch(a, { ...b, firstRegistration: "2001-03" }), false, "three years apart");
+  assert.equal(isSamePlaceMatch(a, { ...b, gearbox: "manual" }), false, "known gearboxes disagree");
+  assert.equal(isSamePlaceMatch(a, { ...b, titles: ["Honda Civic Type R"], title: "Honda Civic Type R" }), false);
+});
+
+test("a sparse card needs the town and the exact price, and may not contradict", () => {
+  const full = PROD.find((r) => r.id === "85c1cad9");
+  const card = PROD.find((r) => r.id === "a372d143");
+  assert.ok(full && card);
+  const a = prodInput(full);
+  const b = prodInput(card);
+
+  assert.ok(isSparseMatch(a, b));
+  assert.equal(isSparseMatch(a, { ...b, priceBase: 44_000 }), false, "price differs");
+  assert.equal(isSparseMatch(a, { ...b, city: "Hanau" }), false, "town differs");
+  assert.equal(isSparseMatch(a, { ...b, mileageKm: 140_000 }), false, "a stated mileage contradicts");
+  assert.equal(isSparseMatch(a, { ...b, sellerType: "dealer" }), false);
+  assert.equal(isSparseMatch(a, prodInput(PROD.find((r) => r.id === "88bde6f7") ?? full)), false,
+    "two full adverts are left to the other rules");
+});
+
+test("an aggregator card with only a make-and-model title is held to a close price", () => {
+  const first = PROD.find((r) => r.id === "14195382");
+  const second = PROD.find((r) => r.id === "b48b8325");
+  assert.ok(first && second);
+  const real = prodInput(second);
+  const card: MatchInput = {
+    ...prodInput(first),
+    title: "Gebraucht (1998) Nissan Skyline GT 280 PS | Seltenes Fahrzeug",
+    titles: ["Gebraucht (1998) Nissan Skyline GT 280 PS | Seltenes Fahrzeug"],
+  };
+
+  assert.ok(isSamePlaceMatch(card, real), "the title says nothing, the price is 9 percent apart");
+  assert.equal(isSamePlaceMatch({ ...card, priceBase: 34_000 }, real), false, "40 percent apart");
 });

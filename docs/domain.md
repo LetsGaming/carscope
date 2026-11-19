@@ -145,14 +145,24 @@ history is meaningless.
    is not agreement. The tolerances are constants in `packages/core/src/identity.ts`.
    The 1 % price limit is what keeps an R34 at €44,900 apart from one at
    €44,444 when their other figures are close.
-5. **Scoring.** `matchScore` weights a shared image-set hash most heavily, then
+5. **Re-posted adverts.** A seller re-posts when an advert runs out and edits it:
+   a cheaper price, a corrected odometer. `isSamePlaceMatch` merges two adverts
+   of one make in the same known town (neither from a dealer) when mileage is
+   within 5 %, registration within 12 months, known power and gearbox agree and
+   the titles share half their words. The price is not compared. A title that
+   is only make, model, year and power (an aggregator card) cannot be compared,
+   so the price has to be within 15 % instead.
+6. **Sparse cards.** A card with at most one of mileage, registration, power and
+   gearbox matches by `isSparseMatch`: same make, same town, exactly the same
+   price, and nothing it does state contradicts the other advert.
+7. **Scoring.** `matchScore` weights a shared image-set hash most heavily, then
    the identity key, title overlap, seller, price, mileage and power. Merge at
    0.72.
 
 The threshold is deliberately conservative. Duplicates are visible and annoying;
 a false merge silently corrupts a price series.
 
-Rules 3 and 4 also run over what is already stored, once at the end of every
+Rules 3 to 6 also run over what is already stored, once at the end of every
 collection job (`VehicleRepository.consolidate`). A duplicate that predates a
 rule, or whose gearbox only arrived with the detail page, would otherwise stay
 split, because a known advert skips matching. Merging keeps the vehicle with the

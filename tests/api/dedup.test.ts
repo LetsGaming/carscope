@@ -5,6 +5,7 @@ import { EMPTY_CRITERIA, type RawListing, type SourceAdapter } from "@carscope/c
 import { openDatabase } from "../../apps/api/src/db/index.ts";
 import { VehicleRepository } from "../../apps/api/src/repositories/vehicles.ts";
 import { SKYLINE, byId } from "./skyline-results.ts";
+import { HELD_IDS, PROD, SAME_CAR, toRaws } from "./prod-skyline.ts";
 
 const NOW = "2026-08-10T12:00:00.000Z";
 const adapter = (id: string): SourceAdapter =>
@@ -80,4 +81,37 @@ test("consolidate leaves different cars alone", (t) => {
 
   const twin = store(vehicles, "88bde6f7");
   assert.equal(twin.created, false, "it joins the Velbert car on arrival");
+});
+
+test("the prod snapshot ends as 13 listed cars, in whatever order the adverts arrive", (t) => {
+  for (const order of [PROD, [...PROD].reverse()]) {
+    const vehicles = repo(t);
+    const vehicleOf = new Map<string, string>();
+    let minute = 0;
+    for (const row of order) {
+      for (const raw of toRaws(row)) {
+        // Each advert is seen a minute after the last, so "latest price" is defined.
+        const at = new Date(Date.parse(NOW) + minute * 60_000).toISOString();
+        minute += 1;
+        const resolved = vehicles.resolve(raw, adapter("kleinanzeigen"), null, at, "DE");
+        vehicles.upsertListing(resolved.vehicle.id, raw, adapter("kleinanzeigen"), at);
+        vehicles.recordPrice({
+          vehicleId: resolved.vehicle.id, observedAt: at, sourceId: "kleinanzeigen",
+          amount: row.price, currency: "EUR", baseAmount: row.price, rate: 1,
+        });
+      }
+    }
+    vehicles.consolidate();
+    for (const row of PROD) {
+      const id = vehicles.search({ ...EMPTY_CRITERIA }, true, true).concat(vehicles.search(EMPTY_CRITERIA, true))
+        .find((r) => (vehicles.findById(r.id)?.listings ?? []).some((l) => l.url.includes(`/${row.id}/`)))?.id;
+      assert.ok(id !== undefined, row.id);
+      vehicleOf.set(row.id, id);
+    }
+
+    assert.equal(vehicles.search(EMPTY_CRITERIA, true).length, PROD.length - HELD_IDS.length - SAME_CAR.length);
+    assert.equal(vehicles.search(EMPTY_CRITERIA, true, true).length, HELD_IDS.length);
+    for (const [a, b] of SAME_CAR) assert.equal(vehicleOf.get(a), vehicleOf.get(b), `${a} and ${b}`);
+    assert.equal(new Set(vehicleOf.values()).size, PROD.length - SAME_CAR.length);
+  }
 });
