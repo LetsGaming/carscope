@@ -73,6 +73,9 @@ export const api = {
   deleteSearch: (id: string): Promise<void> => request(`/searches/${id}`, { method: "DELETE" }),
   results: (criteria: EditableCriteria, active: boolean): Promise<Result[]> =>
     request(`/vehicles?${queryString(criteria, { active })}`),
+  hideVehicle: (id: string): Promise<void> => request(`/vehicles/${id}`, { method: "DELETE" }),
+  restoreVehicle: (id: string): Promise<void> =>
+    request(`/vehicles/${id}/restore`, { method: "POST" }),
   market: (criteria: EditableCriteria, months: number): Promise<MarketReport> =>
     request(`/market?${queryString(criteria, { months })}`),
   sources: (): Promise<Source[]> => request("/sources"),

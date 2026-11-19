@@ -5,6 +5,7 @@ import { eur, num, pct, registration, wattToPs } from "../lib/format";
 import type { Result } from "../lib/types";
 
 const props = defineProps<{ result: Result; layout: "list" | "grid" }>();
+const emit = defineEmits<{ remove: [id: string] }>();
 
 const title = computed(() =>
   [props.result.make, props.result.model, props.result.variant].filter(Boolean).join(" "));
@@ -66,6 +67,12 @@ const flags = computed(() => {
       <span class="amount">{{ eur(result.price) }}</span>
       <span :class="['vs', result.vsMedian < 0 ? 'under' : 'over']">{{ pct(result.vsMedian) }} zum Median</span>
       <span v-if="drop > 0" class="drop under">−{{ eur(drop) }} seit Erstlistung</span>
+      <button
+        type="button" class="remove"
+        title="Passt nicht? Aus der Liste entfernen. Bleibt auch nach einer neuen Abfrage entfernt."
+        @click="emit('remove', result.id)">
+        Entfernen
+      </button>
     </div>
   </article>
 </template>
@@ -96,6 +103,9 @@ const flags = computed(() => {
 .price { text-align: right; display: grid; gap: 2px; }
 .amount { font-size: 1.375rem; font-weight: 600; letter-spacing: -.02em; }
 .vs, .drop { font-size: .8125rem; }
+.remove { justify-self: end; margin-top: var(--s1); padding: 0; font-size: .75rem; color: var(--ink-3); text-decoration: underline; }
+.remove:hover { color: var(--accent); }
+.row.grid .remove { justify-self: start; }
 
 .row.grid {
   grid-template-columns: 1fr;

@@ -160,6 +160,11 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
         </nav>
 
         <section v-show="tab === 'angebote'">
+          <p v-if="ws.removed.value" class="undo" role="status">
+            Entfernt: {{ [ws.removed.value.make, ws.removed.value.model].join(" ") }}
+            ({{ ws.removed.value.sources.join(", ") }}).
+            <button type="button" @click="ws.undoHide">Rückgängig</button>
+          </p>
           <!--
             Only while there is nothing to show. Replacing a populated list with
             a loading line unmounts every row, and a collection run refreshes
@@ -181,7 +186,9 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
             </template>
           </p>
           <div v-else :class="layout === 'grid' ? 'grid' : 'list'">
-            <ResultRow v-for="r in paged" :key="r.id" :result="r" :layout="layout" />
+            <ResultRow
+              v-for="r in paged" :key="r.id" :result="r" :layout="layout"
+              @remove="ws.hideResult" />
           </div>
           <nav v-if="pageCount > 1" class="pager" aria-label="Seiten">
             <button type="button" :disabled="page === 1" @click="page -= 1">Zurück</button>
@@ -254,6 +261,11 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
 .viewsw { display: flex; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; }
 .viewsw button { padding: 3px var(--s3); font-size: .8125rem; color: var(--ink-3); }
 .viewsw button[aria-pressed="true"] { background: var(--sunk); color: var(--ink); }
+.undo {
+  margin: 0; padding: var(--s2) var(--s5); display: flex; gap: var(--s3); align-items: center;
+  background: var(--sunk); font-size: .8125rem; color: var(--ink-2);
+}
+.undo button { color: var(--accent); text-decoration: underline; }
 .list { padding: var(--s2) var(--s5) var(--s6); }
 .grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));

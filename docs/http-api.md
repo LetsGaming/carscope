@@ -18,6 +18,8 @@ schema is the validator, the serialiser and the handler's types at once.
 | `GET` | `/api/vehicles` | Results for criteria on the query string |
 | `GET` | `/api/vehicles/:id` | One vehicle with prices, photos and listings |
 | `GET` | `/api/vehicles/:id/prices` | Price history |
+| `DELETE` | `/api/vehicles/:id` | Hide a car by hand (204). Survives re-scrapes |
+| `POST` | `/api/vehicles/:id/restore` | Undo a hide (204) |
 | `GET` | `/api/market` | Distribution, monthly series, bands, factors |
 | `POST` | `/api/collect` | 202, starts a run for ad-hoc criteria |
 | `GET` | `/api/collect` | The current job, or `null` |
@@ -187,7 +189,8 @@ reason; a plain timestamp filter would need the same guarantee and cannot give i
 ## API keys
 
 `API_KEYS_REQUIRED` (default `false`) decides whether the write endpoints
-(`POST`/`PUT`/`DELETE /api/searches*`, `POST /api/collect`,
+(`POST`/`PUT`/`DELETE /api/searches*`, `DELETE /api/vehicles/:id`,
+`POST /api/vehicles/:id/restore`, `POST /api/collect`,
 `PATCH /api/sources/:id`, all of `/api/webhooks`) require a key. With it unset,
 nothing here changes from before — the bundled SPA and every existing script
 keep working on a trusted network exactly as they did.

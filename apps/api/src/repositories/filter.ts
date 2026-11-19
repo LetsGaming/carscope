@@ -17,7 +17,14 @@ export interface ResultRow extends SqlRow {
 
 export type Param = string | number;
 
-const YEAR = "CAST(substr(v.first_registration, 1, 4) AS INTEGER)";
+/**
+ * A car removed by hand stays out of every list, feed and statistic, whether or
+ * not its adverts are still live. `delisted_at` cannot carry this: a re-scrape
+ * clears it whenever the advert is seen again.
+ */
+export const HIDDEN_EXCLUDED = "v.hidden_at IS NULL";
+
+const YEAR ="CAST(substr(v.first_registration, 1, 4) AS INTEGER)";
 
 /** The words a search is made of: the make and model fields plus the free text. */
 export const searchWords = (c: Criteria): string[] =>
@@ -48,7 +55,7 @@ export function buildFilter(
   activeOnly: boolean,
   periods: readonly Period[] = [],
 ): { where: string; params: Param[] } {
-  const clauses: string[] = ["1 = 1"];
+  const clauses: string[] = [HIDDEN_EXCLUDED];
   const params: Param[] = [];
 
   if (activeOnly) clauses.push("v.delisted_at IS NULL");

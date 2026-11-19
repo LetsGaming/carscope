@@ -5,6 +5,7 @@ import type { VehicleWithPrice } from "@carscope/core";
 import type { Static } from "@sinclair/typebox";
 import { NotFound } from "../errors.ts";
 import { photoUrl } from "./media.ts";
+import { SCOPE } from "../services/api-keys.ts";
 
 const PhotoSchema = Type.Object({
   url: Type.String(),
@@ -56,6 +57,24 @@ const vehicles: FastifyPluginAsyncTypebox = async (app) => {
     const vehicle = app.vehicles.findById(req.params.id);
     if (vehicle === null) throw new NotFound("vehicle");
     return toVehicleDto(vehicle);
+  });
+
+  app.delete("/:id", {
+    schema: { params: IdParams, response: { 204: Type.Null(), 404: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
+  }, async (req, reply) => {
+    if (!app.vehicles.hide(req.params.id, new Date().toISOString())) throw new NotFound("vehicle");
+    reply.code(204);
+    return null;
+  });
+
+  app.post("/:id/restore", {
+    schema: { params: IdParams, response: { 204: Type.Null(), 404: ErrorSchema } },
+    preHandler: app.requireScope(SCOPE.write),
+  }, async (req, reply) => {
+    if (!app.vehicles.unhide(req.params.id)) throw new NotFound("vehicle");
+    reply.code(204);
+    return null;
   });
 
   app.get("/:id/prices", {

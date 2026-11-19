@@ -19,6 +19,7 @@ export function useWorkspace() {
   const criteria = ref<EditableCriteria>(emptyCriteria());
   const results = shallowRef<Result[]>([]);
   const market = shallowRef<MarketReport | null>(null);
+  const removed = shallowRef<Result | null>(null);
   const loading = ref(false);
   const collecting = ref(false);
   const error: Ref<string | null> = ref(null);
@@ -41,6 +42,7 @@ export function useWorkspace() {
 
   const select = (id: string): Promise<void> => guard(async () => {
     activeId.value = id;
+    removed.value = null;
     const found = searches.value.find((s) => s.id === id);
     // A copy, not a reference: the form writes into its ranges, and a shallow
     // copy would edit the entry still sitting in the rail.
@@ -101,9 +103,30 @@ export function useWorkspace() {
     }
   });
 
+  /**
+   * For a car the filters cannot tell apart from a real hit. It is hidden, not
+   * deleted, so the next collection does not bring it back and undo can.
+   */
+  const hideResult = (id: string): Promise<void> => guard(async () => {
+    const gone = results.value.find((r) => r.id === id) ?? null;
+    await api.hideVehicle(id);
+    removed.value = gone;
+    results.value = results.value.filter((r) => r.id !== id);
+    await refresh();
+  });
+
+  const undoHide = (): Promise<void> => guard(async () => {
+    const gone = removed.value;
+    if (gone === null) return;
+    await api.restoreVehicle(gone.id);
+    removed.value = null;
+    await refresh();
+  });
+
   const reset = (): void => {
     activeId.value = null;
     criteria.value = emptyCriteria();
+    removed.value = null;
   };
 
   /**
@@ -123,8 +146,8 @@ export function useWorkspace() {
   });
 
   return {
-    searches, activeId, criteria, results, market, loading, collecting,
+    searches, activeId, criteria, results, market, removed, loading, collecting,
     job: progress.job, error,
-    loadSearches, select, refresh, save, remove, reset, search,
+    loadSearches, select, refresh, save, remove, hideResult, undoHide, reset, search,
   };
 }

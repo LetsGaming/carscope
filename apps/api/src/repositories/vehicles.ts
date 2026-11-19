@@ -7,7 +7,7 @@ import {
 } from "@carscope/core";
 import type { ResolvedVehicle } from "@carscope/collector";
 import { allRows, changed, getRow, type Db, type SqlRow } from "../db/index.ts";
-import { buildFilter, searchWords, textClause, type Param, type ResultRow } from "./filter.ts";
+import { buildFilter, HIDDEN_EXCLUDED, searchWords, textClause, type Param, type ResultRow } from "./filter.ts";
 import {
   toListing, toPhoto, toSnapshot, toVehicle,
   type ListingRow, type PhotoRow, type SnapshotRow, type VehicleRow,
@@ -351,6 +351,19 @@ export class VehicleRepository {
     return listings;
   }
 
+  /** False when no such vehicle exists. Hiding twice keeps the first time. */
+  hide(id: string, now: string): boolean {
+    return changed(this.#db.prepare(
+      "UPDATE vehicles SET hidden_at = COALESCE(hidden_at, ?) WHERE id = ?",
+    ).run(now, id)) > 0;
+  }
+
+  unhide(id: string): boolean {
+    return changed(this.#db.prepare(
+      "UPDATE vehicles SET hidden_at = NULL WHERE id = ?",
+    ).run(id)) > 0;
+  }
+
   /** Replaces the whole set: a changed image set is a new set, not an append. */
   setImageHash(vehicleId: string, hash: string | null): void {
     this.#db.prepare("UPDATE vehicles SET image_hash = ? WHERE id = ?").run(hash, vehicleId);
@@ -394,7 +407,7 @@ export class VehicleRepository {
     activeOnly: boolean,
   ): PeriodEvidence | null {
     const said = textClause(word);
-    const clauses: string[] = ["v.first_registration IS NOT NULL"];
+    const clauses: string[] = ["v.first_registration IS NOT NULL", HIDDEN_EXCLUDED];
     const params: Param[] = [];
 
     if (activeOnly) clauses.push("v.delisted_at IS NULL");
