@@ -5,7 +5,7 @@ import {
   type Market, type Fuel, type Gearbox,
 } from "@carscope/core";
 import { asNumber, asString, embeddedJson, isRecord, pick, slug } from "../html.ts";
-import { extractDescription, germanNumber, powerLabelToWatt, registrationToIso } from "../text.ts";
+import { cleanCity, extractDescription, germanNumber, powerLabelToWatt, registrationToIso } from "../text.ts";
 import { normaliseMake, splitMakeModel } from "./make-model.ts";
 
 const HOST: Readonly<Record<string, string>> = {
@@ -162,7 +162,7 @@ function toRaw(node: unknown, host: string): RawListing[] {
       ...(toMarket(asString(pick(node, ["location", "countryCode"]))) === null
         ? {}
         : { market: toMarket(asString(pick(node, ["location", "countryCode"]))) as never }),
-      city: asString(pick(node, ["location", "city"])),
+      city: cleanCity(asString(pick(node, ["location", "city"]))),
       postalCode: asString(pick(node, ["location", "zip"])),
     },
   }];

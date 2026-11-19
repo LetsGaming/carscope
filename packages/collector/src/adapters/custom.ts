@@ -4,7 +4,7 @@ import {
   type QueryContext, type RawListing, type RequestSpec, type Result, type SourceAdapter,
 } from "@carscope/core";
 import { asNumber, asString, isRecord, jsonLdBlocks, pick, slug } from "../html.ts";
-import { germanNumber, powerLabelToWatt, registrationToIso } from "../text.ts";
+import { cleanCity, germanNumber, powerLabelToWatt, registrationToIso } from "../text.ts";
 import { splitMakeModel } from "./make-model.ts";
 
 export interface CustomSource {
@@ -142,7 +142,7 @@ function toRaw(node: unknown, origin: string): RawListing[] {
       firstRegistration: registrationToIso(
         asString(node["productionDate"]) ?? asString(node["vehicleModelDate"]),
       ),
-      city: asString(pick(node, ["offers", "availableAtOrFrom", "address", "addressLocality"])),
+      city: cleanCity(asString(pick(node, ["offers", "availableAtOrFrom", "address", "addressLocality"]))),
       postalCode: asString(pick(node, ["offers", "availableAtOrFrom", "address", "postalCode"])),
     },
   }];

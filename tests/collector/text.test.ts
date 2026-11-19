@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { psToWatt, wattToPs } from "@carscope/core";
 import {
-  blocksBy, decodeEntities, extractDescription, germanNumber, imageUrls, parsePlace, postedAt,
+  blocksBy, cleanCity, decodeEntities, extractDescription, germanNumber, imageUrls, parsePlace, postedAt,
   powerLabelToWatt, registrationToIso, richText, visibleText,
 } from "../../packages/collector/src/text.ts";
 
@@ -41,6 +41,16 @@ test("places split into country, postal code and city", () => {
   assert.deepEqual(parsePlace("57520 Steinebach (Sieg)"),
     { country: null, postalCode: "57520", city: "Steinebach (Sieg)" });
   assert.deepEqual(parsePlace(null), { country: null, postalCode: null, city: null });
+});
+
+test("a city loses the posting date and the town epithet a geocoder cannot match", () => {
+  assert.equal(cleanCity("Bönningstedt Heute,"), "Bönningstedt");
+  assert.equal(cleanCity("Velbert Gestern,"), "Velbert");
+  assert.equal(cleanCity("Hückeswagen, Schloss-Stadt"), "Hückeswagen");
+  assert.equal(cleanCity("Steinebach (Sieg)"), "Steinebach (Sieg)");
+  assert.equal(cleanCity("Heute,"), null);
+  assert.equal(cleanCity(null), null);
+  assert.equal(parsePlace("57520 Steinebach (Sieg) Gestern,").city, "Steinebach (Sieg)");
 });
 
 test("visible text drops scripts, styles and markup", () => {

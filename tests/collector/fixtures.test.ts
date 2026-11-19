@@ -84,6 +84,12 @@ test("kleinanzeigen reads listings from data-adid articles", () => {
     assert.ok(l.photoUrls.length > 0, "the embedded ImageObject supplied a photo");
     assert.match(l.attributes.postalCode ?? "", /^\d{5}$/);
   }
+
+  assert.deepEqual(
+    listings.map((l) => l.attributes.city).sort(),
+    ["Hochheim am Main", "Steinebach (Sieg)", "Straelen"],
+    "the posting date next to the place is not part of the city",
+  );
 });
 
 test("kleinanzeigen builds the two-grammar filter URL", () => {

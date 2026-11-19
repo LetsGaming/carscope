@@ -82,15 +82,29 @@ export interface Place {
   readonly country: string | null;
 }
 
+/**
+ * A town name a geocoder can find. Portals append the posting date ("Velbert
+ * Heute,") or a town epithet ("Hückeswagen, Schloss-Stadt"); neither is part of
+ * the name, and either makes a map search come back empty.
+ */
+export function cleanCity(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const city = (text.split(",")[0] ?? "")
+    .replace(/(?:^|\s+)(?:Heute|Gestern|Vorgestern)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return city === "" ? null : city;
+}
+
 /** "AT-4030 Linz" and "57520 Steinebach (Sieg)" are the two shapes in use. */
 export function parsePlace(text: string | null | undefined): Place {
   if (!text) return { postalCode: null, city: null, country: null };
   const match = /(?:([A-Z]{2})-)?(\d{4,5})\s+(.+)/.exec(text.trim());
-  if (!match) return { postalCode: null, city: text.trim() || null, country: null };
+  if (!match) return { postalCode: null, city: cleanCity(text), country: null };
   return {
     country: match[1] ?? null,
     postalCode: match[2] ?? null,
-    city: match[3]?.trim() ?? null,
+    city: cleanCity(match[3]),
   };
 }
 

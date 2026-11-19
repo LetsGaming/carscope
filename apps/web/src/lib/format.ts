@@ -42,7 +42,7 @@ export function mapsUrl(place: {
   city: string | null;
   market: string;
 }): string | null {
+  if (!place.postalCode && !place.city) return null;
   const query = [place.postalCode, place.city, place.market].filter(Boolean).join(" ");
-  if (query.trim() === "") return null;
   return `https://www.openstreetmap.org/search?query=${encodeURIComponent(query)}`;
 }

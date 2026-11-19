@@ -211,7 +211,12 @@ function toRawListing(article: string): RawListing[] {
   const price = germanNumber(/(\d[\d.]*)\s*€/.exec(text)?.[1]);
   if (price === null) return [];
 
-  const place = parsePlace(/(\d{5}\s+[^\d•|]{2,40})/.exec(text)?.[1]);
+  // The location has its own element; in the flattened text it runs into the
+  // posting date that sits next to it.
+  const place = parsePlace(
+    /<span>\s*(\d{5}\s+[^<]{2,60}?)\s*<\/span>/.exec(article)?.[1]
+      ?? /(\d{5}\s+[^\d•|]{2,40})/.exec(text)?.[1],
+  );
   const teaser = isRecord(image) ? asString(image["description"]) : null;
 
   return [{
