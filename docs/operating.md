@@ -264,3 +264,27 @@ npm run capture -- "<url>"      # fetches one page and saves it, headed if confi
 closes each page as soon as it has the markup, so the artefacts on disk are
 usually more useful than watching. Both write a screenshot, which is the quickest
 way to tell a bot wall from a cookie dialog.
+
+## Cleaning up a database
+
+`npm run cleanup` brings a database in line with the current rules: it holds
+wanted ads and placeholder prices, moves the adverts named in `KNOWN_REPAIRS`
+(`services/cleanup.ts`) off the car a merge put them on, merges duplicates,
+points photo rows at the files already on disk, and cuts price rows down to the
+first and last of each run of one price. It prints the counts before and after
+and the monthly market numbers before and after.
+
+The default is a dry run: it copies the database to a temporary file, changes
+the copy and deletes it. `--apply` writes a backup next to the database
+(`carscope.sqlite.before-cleanup-<time>`), changes the database and runs
+`VACUUM`. Stop the server first, because a collection job running at the same
+time would merge or hold cars under the cleanup. In the container:
+
+```
+docker compose stop carscope
+docker compose run --rm carscope node --experimental-strip-types apps/api/src/tools/cleanup.ts
+docker compose run --rm carscope node --experimental-strip-types apps/api/src/tools/cleanup.ts --apply
+docker compose up -d carscope
+```
+
+The cleanup is safe to run twice; a second run changes nothing.

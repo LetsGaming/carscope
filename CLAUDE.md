@@ -30,6 +30,8 @@ npm run capture -- "<url>"         # fetch one page and save it (debugging a por
 npm run explain -- <source> <debug-file.html> --year 1998-2002 --ps 280- --find <id>
 npm run warmup -- <url>            # open a browser to warm/save a session profile
 npm run session -- export|import <dir>
+npm run cleanup                    # dry run on a copy: holds, merges, photo links, snapshot volume
+npm run cleanup -- --apply         # backup next to the database, then change it (stop the server first)
 npm run fingerprint [-- <url>]     # run bot-detection test pages, screenshot the result
 ```
 

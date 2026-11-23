@@ -55,6 +55,10 @@ interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; phot
 interface ListingOwnerRow extends SqlRow { vehicle_id: string }
 interface CountRow extends SqlRow { n: number }
 interface IdRow extends SqlRow { id: string }
+interface CountsRow extends SqlRow {
+  vehicles: number; listed: number; held: number; hidden: number;
+  listings: number; snapshots: number; photos: number; photos_on_disk: number;
+}
 interface HoldListingRow extends SqlRow { title: string; url: string }
 interface HoldRow extends SqlRow {
   make: string; model: string; description: string | null;
@@ -613,6 +617,10 @@ export class VehicleRepository {
     const rows = allRows<SnapshotRow>(this.#db.prepare(
       "SELECT * FROM price_snapshots WHERE vehicle_id = ? ORDER BY observed_at",
     ), dropId);
+    this.#placeSnapshots(keepId, rows, dropFresher ? 1 : -1);
+  }
+
+  #placeSnapshots(targetId: string, rows: readonly SnapshotRow[], step: 1 | -1): void {
     const taken = this.#db.prepare(
       "SELECT 1 AS x FROM price_snapshots WHERE vehicle_id = ? AND observed_at = ? AND source_id = ?",
     );
@@ -620,16 +628,127 @@ export class VehicleRepository {
       INSERT INTO price_snapshots (vehicle_id, observed_at, source_id, amount, currency, base_amount, rate)
       VALUES (?,?,?,?,?,?,?)
     `);
-    const step = dropFresher ? 1 : -1;
     for (const r of rows) {
       let at = Date.parse(r.observed_at);
       let iso = r.observed_at;
-      while (getRow<SqlRow>(taken, keepId, iso, r.source_id) !== undefined) {
+      while (getRow<SqlRow>(taken, targetId, iso, r.source_id) !== undefined) {
         at += step;
         iso = new Date(at).toISOString();
       }
-      insert.run(keepId, iso, r.source_id, r.amount, r.currency, r.base_amount, r.rate);
+      insert.run(targetId, iso, r.source_id, r.amount, r.currency, r.base_amount, r.rate);
     }
+  }
+
+  /**
+   * Moves one advert, with the prices it alone reported, onto the car that holds
+   * another advert. For an advert a merge put on the wrong car. False when either
+   * advert is unknown or both already sit on one car. The prices are those of the
+   * advert's source, in its lifetime, at `amount`: the wrong car's own prices of
+   * that source stay.
+   */
+  moveListing(
+    advert: { sourceId: string; listingId: string },
+    into: { sourceId: string; listingId: string },
+    amount: number,
+  ): boolean {
+    const find = this.#db.prepare("SELECT * FROM listings WHERE source_id = ? AND source_listing_id = ?");
+    return transaction(this.#db, () => {
+      const moved = getRow<ListingRow>(find, advert.sourceId, advert.listingId);
+      const target = getRow<ListingRow>(find, into.sourceId, into.listingId);
+      if (moved === undefined || target === undefined || moved.vehicle_id === target.vehicle_id) return false;
+
+      const prices = allRows<SnapshotRow>(this.#db.prepare(`
+        SELECT * FROM price_snapshots
+        WHERE vehicle_id = ? AND source_id = ? AND amount = ? AND observed_at >= ? AND observed_at <= ?
+        ORDER BY observed_at
+      `), moved.vehicle_id, moved.source_id, amount, moved.first_seen_at, moved.last_seen_at);
+
+      this.#db.prepare("UPDATE listings SET vehicle_id = ? WHERE id = ?").run(target.vehicle_id, moved.id);
+      this.#placeSnapshots(target.vehicle_id, prices, 1);
+      const remove = this.#db.prepare(
+        "DELETE FROM price_snapshots WHERE vehicle_id = ? AND source_id = ? AND observed_at = ?",
+      );
+      for (const r of prices) remove.run(moved.vehicle_id, r.source_id, r.observed_at);
+      this.#reassess(moved.vehicle_id);
+      this.#reassess(target.vehicle_id);
+      return true;
+    });
+  }
+
+  /** Points photo rows without a file at the file on disk for that position. Returns how many. */
+  relinkPhotos(vehicleId: string, files: ReadonlyMap<number, string>): number {
+    const update = this.#db.prepare(
+      "UPDATE photos SET local_path = ? WHERE vehicle_id = ? AND position = ? AND local_path IS NULL",
+    );
+    let linked = 0;
+    for (const [position, path] of files) linked += changed(update.run(path, vehicleId, position));
+    return linked;
+  }
+
+  /**
+   * Keeps, per vehicle and source, the first and the last snapshot of every run of
+   * one price, and deletes what lies between. The same state `recordPrice` keeps
+   * from now on. Returns the number deleted.
+   */
+  compactSnapshots(): number {
+    return transaction(this.#db, () => {
+      const rows = allRows<SnapshotRow>(this.#db.prepare(
+        "SELECT * FROM price_snapshots ORDER BY vehicle_id, source_id, observed_at",
+      ));
+      const remove = this.#db.prepare(
+        "DELETE FROM price_snapshots WHERE vehicle_id = ? AND source_id = ? AND observed_at = ?",
+      );
+      let deleted = 0;
+      for (const [i, r] of rows.entries()) {
+        const same = (x: SnapshotRow | undefined): boolean =>
+          x !== undefined && x.vehicle_id === r.vehicle_id && x.source_id === r.source_id
+          && x.amount === r.amount && x.currency === r.currency;
+        if (same(rows[i - 1]) && same(rows[i + 1])) {
+          remove.run(r.vehicle_id, r.source_id, r.observed_at);
+          deleted += 1;
+        }
+      }
+      return deleted;
+    });
+  }
+
+  /** Every vehicle id, for the maintenance tools. */
+  vehicleIds(): string[] {
+    return allRows<IdRow>(this.#db.prepare("SELECT id FROM vehicles ORDER BY rowid")).map((r) => r.id);
+  }
+
+  /** Row counts, for the maintenance tools to show what they changed. */
+  counts(): { vehicles: number; listed: number; held: number; hidden: number; listings: number; snapshots: number; photos: number; photosOnDisk: number } {
+    const row = getRow<CountsRow>(this.#db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM vehicles) AS vehicles,
+        (SELECT COUNT(*) FROM vehicles WHERE hidden_at IS NULL AND held_reason IS NULL) AS listed,
+        (SELECT COUNT(*) FROM vehicles WHERE held_reason IS NOT NULL) AS held,
+        (SELECT COUNT(*) FROM vehicles WHERE hidden_at IS NOT NULL) AS hidden,
+        (SELECT COUNT(*) FROM listings) AS listings,
+        (SELECT COUNT(*) FROM price_snapshots) AS snapshots,
+        (SELECT COUNT(*) FROM photos) AS photos,
+        (SELECT COUNT(*) FROM photos WHERE local_path IS NOT NULL) AS photos_on_disk
+    `));
+    if (row === undefined) throw new Error("counts returned no row");
+    return {
+      vehicles: row.vehicles, listed: row.listed, held: row.held, hidden: row.hidden,
+      listings: row.listings, snapshots: row.snapshots, photos: row.photos, photosOnDisk: row.photos_on_disk,
+    };
+  }
+
+  /** Every sighting as one observation: how the monthly history used to be counted. */
+  sightings(criteria: Criteria, sinceIso: string): { baseAmount: number; observedAt: string }[] {
+    const { where, params } = buildFilter({ ...criteria, priceEur: emptyRange() }, false);
+    const rows = allRows<PriceRow>(this.#db.prepare(`
+      SELECT ps.vehicle_id AS id, ps.observed_at AS at, ps.base_amount AS amount
+      FROM price_snapshots ps JOIN vehicles v ON v.id = ps.vehicle_id
+      WHERE ${where.replaceAll("latest.amount", "NULL")} AND ps.observed_at >= ? AND ps.base_amount >= ?
+    `), ...params, sinceIso, PLACEHOLDER_PRICE_BELOW_EUR);
+    const { min, max } = criteria.priceEur;
+    return rows
+      .filter((r) => (min === null || r.amount >= min) && (max === null || r.amount <= max))
+      .map((r) => ({ baseAmount: r.amount, observedAt: r.at }));
   }
 
   /**

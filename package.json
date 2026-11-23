@@ -23,7 +23,8 @@
     "warmup": "node --experimental-strip-types apps/api/src/tools/warmup.ts",
     "session": "node --experimental-strip-types apps/api/src/tools/session.ts",
     "fingerprint": "node --experimental-strip-types apps/api/src/tools/fingerprint.ts",
-    "keys": "node --experimental-strip-types apps/api/src/tools/keys.ts"
+    "keys": "node --experimental-strip-types apps/api/src/tools/keys.ts",
+    "cleanup": "node --experimental-strip-types apps/api/src/tools/cleanup.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
