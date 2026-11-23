@@ -89,8 +89,8 @@ search names a model, the collector and the SQL query both require the car's
 model to be one of the searched words or an alias of one (`MODEL_ALIASES` in
 `packages/core/src/criteria.ts`: R32, R33 and R34 are Skylines). A portal with
 no model field is judged by the word after the make in the title. The SQL rule
-needs the `model` field of the criteria; a search typed only as free text is not
-checked against the stored model.
+reads the model from the same make and model split the collector uses, because
+the web client sends make, model and text as one string.
 
 Some search words name a build period rather than a word an advert must carry.
 "R34" is one, and so are E46, W124, Mk4, 993, B7 and every other generation or
@@ -253,3 +253,10 @@ number on the windscreen. Watts round-trip both units exactly; the UI shows PS.
   the rate used, and the base-currency amount, so later FX moves never rewrite
   history.
 
+
+## Cars left out for an unstated value
+
+A search that sets a range for power, registration or mileage cannot place a car
+that does not state that value, so the list leaves it out. The market report
+counts them (`unknownCount`) and the workspace says so under the list. Most
+become known when the detail page is read.

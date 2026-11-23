@@ -84,6 +84,7 @@ export interface MarketReport {
   observationCount: number;
   excludedByText: number;
   heldCount: number;
+  unknownCount: number;
   periods: { token: string; fromYear: number; toYear: number }[];
 }
 

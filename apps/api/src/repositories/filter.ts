@@ -1,4 +1,5 @@
 import { HOLD, modelTerms, psToWatt, type Criteria, type Period } from "@carscope/core";
+import { splitMakeModel } from "@carscope/collector";
 import type { SqlRow } from "../db/index.ts";
 
 export interface ResultRow extends SqlRow {
@@ -64,6 +65,7 @@ export function buildFilter(
   activeOnly: boolean,
   periods: readonly Period[] = [],
   held = false,
+  lenient = false,
 ): { where: string; params: Param[] } {
   const clauses: string[] = [HIDDEN_EXCLUDED, held ? "v.held_reason IS NOT NULL" : HELD_EXCLUDED];
   const params: Param[] = [];
@@ -89,15 +91,22 @@ export function buildFilter(
   // The words above may be met by any listing's title, which lets a car with
   // another model (a Stagea advertised as Skyline gear) through. The vehicle's
   // own model has the last word.
-  const terms = c.model ? modelTerms(c.model) : [];
+  //
+  // The web client sends make, model and text as one string, so the model is
+  // read from the same split the collector uses, not from `c.model` alone.
+  const searchedModel = splitMakeModel(c).model;
+  const terms = searchedModel === null ? [] : modelTerms(searchedModel);
   if (terms.length > 0) {
     clauses.push(`(${terms.map(() => "v.model LIKE ? ESCAPE '\\'").join(" OR ")})`);
     params.push(...terms.map((t) => `%${escapeLike(t)}%`));
   }
 
+  // A car that does not state a value cannot be placed in a range. Strictly it is
+  // left out; `lenient` lets it through, so the number left out can be counted.
   const between = (column: string, min: number | null, max: number | null, scale = (n: number): number => n): void => {
-    if (min !== null) { clauses.push(`${column} >= ?`); params.push(scale(min)); }
-    if (max !== null) { clauses.push(`${column} <= ?`); params.push(scale(max)); }
+    const unknown = lenient ? `${column} IS NULL OR ` : "";
+    if (min !== null) { clauses.push(`(${unknown}${column} >= ?)`); params.push(scale(min)); }
+    if (max !== null) { clauses.push(`(${unknown}${column} <= ?)`); params.push(scale(max)); }
   };
 
   between("v.mileage_km", c.mileageKm.min, c.mileageKm.max);

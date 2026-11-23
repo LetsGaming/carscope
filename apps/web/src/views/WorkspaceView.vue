@@ -44,6 +44,9 @@ const excluded = computed(() => ws.market.value?.excludedByText ?? 0);
 /** Wanted ads and placeholder prices: stored, but not counted as listings. */
 const held = computed(() => ws.market.value?.heldCount ?? 0);
 
+/** Left out because the search sets a range for a value the advert does not state. */
+const unknown = computed(() => ws.market.value?.unknownCount ?? 0);
+
 /** Words the query read as a build period rather than as a word to look for. */
 const periods = computed(() => ws.market.value?.periods ?? []);
 
@@ -221,6 +224,10 @@ watch(() => ws.collecting.value, (busy) => { if (!busy) void loadSources(); });
             </button>
           </p>
           <HeldList v-if="ws.showHeld.value" :results="ws.heldResults.value" @release="ws.releaseHeld" />
+          <p v-if="unknown > 0" class="excluded">
+            {{ unknown }} {{ unknown === 1 ? "Anzeige fehlt" : "Anzeigen fehlen" }} in der Liste, weil Leistung,
+            Erstzulassung oder Kilometerstand nicht angegeben sind und die Suche dafür einen Bereich setzt.
+          </p>
           <p v-if="excluded > 0" class="excluded">
             {{ excluded }} weitere gespeicherte {{ excluded === 1 ? "Anzeige passt" : "Anzeigen passen" }}
             nicht zum Suchtext „{{ ws.criteria.value.text }}“.

@@ -115,9 +115,9 @@ export class VehicleRepository {
    * saved search collected them. Saving a search schedules collection; it is not
    * a precondition for looking at what is already there.
    */
-  search(criteria: Criteria, activeOnly: boolean, held = false): ResultRow[] {
+  search(criteria: Criteria, activeOnly: boolean, held = false, lenient = false): ResultRow[] {
     const { where, params } = buildFilter(
-      criteria, activeOnly, held ? [] : this.periods(criteria, activeOnly), held,
+      criteria, activeOnly, held ? [] : this.periods(criteria, activeOnly), held, lenient,
     );
     return allRows<ResultRow>(this.#db.prepare(`
       WITH latest AS (

@@ -36,6 +36,7 @@ const MarketSchema = Type.Object({
   observationCount: Type.Integer(),
   excludedByText: Type.Integer(),
   heldCount: Type.Integer(),
+  unknownCount: Type.Integer(),
   periods: Type.Array(Type.Object({
     token: Type.String(),
     fromYear: Type.Integer(),

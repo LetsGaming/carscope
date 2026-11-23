@@ -30,6 +30,8 @@ export interface MarketReport {
   readonly excludedByText: number;
   /** Stored cars matching the search that are held back: wanted ads, placeholder prices. */
   readonly heldCount: number;
+  /** Cars left out only because power, registration or mileage is not stated, for a range the search sets. */
+  readonly unknownCount: number;
   /**
    * Search words read as a production period rather than as a word the advert
    * must contain. Reported so the reader can see why a car without the word is
@@ -100,6 +102,7 @@ export class MarketService {
       observationCount: observations.length,
       excludedByText: Math.max(0, withoutText - active.length),
       heldCount: this.#vehicles.search(criteria, true, true).length,
+      unknownCount: Math.max(0, this.#vehicles.search(criteria, true, false, true).length - active.length),
       periods: this.#vehicles.periods(criteria, true),
     };
   }
