@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
-  holdReason, isDuplicate, matchRank, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
-  type MatchInput, type Period, type PeriodEvidence,
+  emptyRange, holdReason, isDuplicate, matchRank, monthlyObservations, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
+  type CarObservation, type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
 } from "@carscope/core";
@@ -49,7 +49,8 @@ const CANDIDATE_COLUMNS = `
   ) AS titles`;
 /** A `since()` row: the search shape plus the rowid cursor and when the car was first seen. */
 export type FeedRow = ResultRow & { seq: number; first_seen_at: string };
-interface ObservationRow extends SqlRow { baseAmount: number; observedAt: string }
+interface SpanRow extends SqlRow { id: string; from_at: string; to_at: string }
+interface PriceRow extends SqlRow { id: string; at: string; amount: number }
 interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; photos: number }
 interface ListingOwnerRow extends SqlRow { vehicle_id: string }
 interface CountRow extends SqlRow { n: number }
@@ -206,19 +207,38 @@ export class VehicleRepository {
     return { items: rows, nextCursor: last === undefined ? null : last.seq };
   }
 
-  observations(criteria: Criteria, sinceIso: string): { baseAmount: number; observedAt: string }[] {
-    const { where, params } = buildFilter(criteria, false);
-    return allRows<ObservationRow>(this.#db.prepare(`
-      SELECT ps.base_amount AS baseAmount, ps.observed_at AS observedAt
-      FROM price_snapshots ps
-      JOIN vehicles v ON v.id = ps.vehicle_id
-      WHERE ${where.replaceAll("latest.amount", "ps.base_amount")}
-        AND ps.observed_at >= ? AND ps.base_amount >= ?
+  /**
+   * One price per car and month, for the monthly history. The price range of the
+   * search applies to that month's price, not to the car as a whole.
+   */
+  observations(criteria: Criteria, sinceIso: string): CarObservation[] {
+    const { where, params } = buildFilter({ ...criteria, priceEur: emptyRange() }, false);
+    const cars = allRows<SpanRow>(this.#db.prepare(`
+      SELECT v.id AS id, COALESCE(v.first_listed_at, v.first_seen_at) AS from_at,
+             COALESCE(v.delisted_at, v.last_seen_at) AS to_at
+      FROM vehicles v WHERE ${where.replaceAll("latest.amount", "NULL")}
+    `), ...params);
+    const snapshots = allRows<PriceRow>(this.#db.prepare(`
+      SELECT ps.vehicle_id AS id, ps.observed_at AS at, ps.base_amount AS amount
+      FROM price_snapshots ps JOIN vehicles v ON v.id = ps.vehicle_id
+      WHERE ${where.replaceAll("latest.amount", "NULL")} AND ps.base_amount >= ?
       ORDER BY ps.observed_at
-    `), ...params, sinceIso, PLACEHOLDER_PRICE_BELOW_EUR);
+    `), ...params, PLACEHOLDER_PRICE_BELOW_EUR);
+
+    const byCar = new Map<string, { observedAt: string; baseAmount: number }[]>();
+    for (const r of snapshots) {
+      const list = byCar.get(r.id) ?? [];
+      list.push({ observedAt: r.at, baseAmount: r.amount });
+      byCar.set(r.id, list);
+    }
+    const { min, max } = criteria.priceEur;
+    return monthlyObservations(
+      cars.map((c) => ({ vehicleId: c.id, from: c.from_at, to: c.to_at, prices: byCar.get(c.id) ?? [] })),
+      sinceIso,
+    ).filter((o) => (min === null || o.baseAmount >= min) && (max === null || o.baseAmount <= max));
   }
 
-/**
+  /**
    * True while the detail page has not been read, and again while a vehicle has
    * at most a cover photo. Marking a fetch as done permanently means a parser
    * that improves later can never reach the cars collected before it — which is
@@ -389,7 +409,28 @@ export class VehicleRepository {
     this.#reassess(vehicleId);
   }
 
+  /**
+   * A price is stored when it changes, plus one row that says when it was last
+   * confirmed. A car seen every three hours for two months at one price is two
+   * rows, not five hundred, and the history chart still reaches the last sighting.
+   */
   recordPrice(s: PriceSnapshot): void {
+    const [latest, before] = allRows<SnapshotRow>(this.#db.prepare(
+      "SELECT * FROM price_snapshots WHERE vehicle_id = ? AND source_id = ? ORDER BY observed_at DESC LIMIT 2",
+    ), s.vehicleId, s.sourceId);
+    const same = (r: SnapshotRow | undefined): boolean =>
+      r !== undefined && r.amount === s.amount && r.currency === s.currency;
+
+    if (latest !== undefined && same(latest) && s.observedAt > latest.observed_at) {
+      if (same(before)) {
+        this.#db.prepare(`
+          UPDATE price_snapshots SET observed_at = ?, base_amount = ?, rate = ?
+          WHERE vehicle_id = ? AND source_id = ? AND observed_at = ?
+        `).run(s.observedAt, s.baseAmount, s.rate, s.vehicleId, s.sourceId, latest.observed_at);
+        this.#reassess(s.vehicleId);
+        return;
+      }
+    }
     this.#db.prepare(`
       INSERT INTO price_snapshots (vehicle_id, observed_at, source_id, amount, currency, base_amount, rate)
       VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING

@@ -60,6 +60,61 @@ export interface MonthlyPoint extends Distribution {
 
 const monthOf = (iso: string): string => iso.slice(0, 7);
 
+/** What one car asked in one month. One row per car and month, never one per sighting. */
+export interface CarObservation extends Observation {
+  readonly vehicleId: string;
+}
+
+export interface CarHistory {
+  readonly vehicleId: string;
+  /** First and last day the car was for sale, ISO. */
+  readonly from: string;
+  readonly to: string;
+  /** Asking prices over time, oldest first. */
+  readonly prices: readonly Observation[];
+}
+
+const monthEnd = (month: string): string => {
+  const [year, mon] = month.split("-").map(Number) as [number, number];
+  return new Date(Date.UTC(year, mon, 0, 23, 59, 59, 999)).toISOString();
+};
+
+const nextMonth = (month: string): string => {
+  const [year, mon] = month.split("-").map(Number) as [number, number];
+  return new Date(Date.UTC(year, mon, 1)).toISOString().slice(0, 7);
+};
+
+/**
+ * The price a car asked in each month it was for sale: the last price seen up to
+ * the end of that month or the end of its sale, whichever comes first. A car
+ * counts once per month however often it was seen. Counting sightings made a car
+ * listed for 60 days weigh as much as thirty cars listed for two, and the
+ * monthly median followed whichever car stayed longest.
+ */
+export function monthlyObservations(
+  cars: readonly CarHistory[],
+  sinceIso: string,
+): CarObservation[] {
+  const out: CarObservation[] = [];
+  for (const car of cars) {
+    const first = car.prices[0];
+    if (first === undefined) continue;
+    const startMonth = monthOf(car.from < sinceIso ? sinceIso : car.from);
+    const lastMonth = monthOf(car.to);
+    for (let month = startMonth; month <= lastMonth; month = nextMonth(month)) {
+      const cutoff = monthEnd(month) < car.to ? monthEnd(month) : car.to;
+      let asked = first;
+      for (const price of car.prices) {
+        if (price.observedAt <= cutoff) asked = price;
+        else break;
+      }
+      out.push({ vehicleId: car.vehicleId, baseAmount: asked.baseAmount, observedAt: `${month}-01T00:00:00.000Z` });
+    }
+  }
+  return out;
+}
+
+
 export function monthlySeries(observations: readonly Observation[]): MonthlyPoint[] {
   const buckets = new Map<string, number[]>();
   for (const o of observations) {

@@ -59,7 +59,7 @@ const daysCollected = computed(() => {
       <div class="stat">
         <span class="k">Stichprobe</span>
         <span class="v">{{ report.observationCount }}</span>
-        <span class="s">Beobachtungen · {{ report.activeCount }} aktuell gelistet</span>
+        <span class="s">Fahrzeuge in der Historie · {{ report.activeCount }} aktuell gelistet</span>
       </div>
     </div>
 
@@ -95,7 +95,7 @@ const daysCollected = computed(() => {
       </div>
 
       <p class="caveat" v-if="hasTrend">
-        Beruht auf {{ report.observationCount }} Beobachtungen. Monate mit weniger als fünf
+        Beruht auf {{ report.observationCount }} Fahrzeugen, je Fahrzeug und Monat ein Preis. Monate mit weniger als fünf
         Fahrzeugen sind blass dargestellt, weil einzelne Ausreißer sie stark ziehen.
       </p>
     </section>

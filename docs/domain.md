@@ -243,6 +243,12 @@ number on the windscreen. Watts round-trip both units exactly; the UI shows PS.
 
 - **History cannot be backfilled.** Nothing public exposes historical asking
   prices. The database starts empty and accumulates from the first run.
+- **A car counts once per month.** The monthly history takes, for each car and
+  each month it was for sale, the price in effect (the last one seen up to the
+  month end or the end of the sale). It used to count every sighting, so a car
+  listed for 60 days weighed as much as thirty cars listed for two, and the
+  median followed the car that stayed longest. The sample size and the
+  confidence rating count cars too.
 - **Thin months are marked.** Below five vehicles a month is flagged unreliable
   and drawn faded. A rising line built on three cars is not a trend.
 - **Price factors are gated twice.** A factor is hidden unless both groups have

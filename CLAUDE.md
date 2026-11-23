@@ -60,7 +60,9 @@ apps/web              Vue 3 + Vite. Depends on core for the criteria shape,
 **Domain model**: a **vehicle** is one physical car; a **listing** is one advert
 for it on one portal, unique on `(source_id, source_listing_id)`. A match
 across portals becomes a second listing on the same vehicle, not a second car.
-`price_snapshots` is append-only — prices are appended, never overwritten.
+`price_snapshots` keeps every price change and never rewrites a price. A price
+seen again gets one "last confirmed" row whose time moves forward (see
+`recordPrice`), so history is by change, not by run.
 
 **apps/api layering**: route → schema → service or repository → SQLite. A
 handler containing an `if` that encodes a rule is in the wrong place: input

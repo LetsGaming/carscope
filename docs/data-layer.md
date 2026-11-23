@@ -43,9 +43,13 @@ Two shapes carry the model:
 - A **vehicle** is one physical car. A **listing** is one advert for it on one
   portal, unique on `(source_id, source_listing_id)`. One vehicle can have
   several listings, which is what deduplication produces.
-- `price_snapshots` is append-only. A snapshot stores the original amount, its
-  currency, the rate used and the base-currency amount, so a later FX move never
-  rewrites history.
+- `price_snapshots` records price changes. A snapshot stores the original amount,
+  its currency, the rate used and the base-currency amount, so a later FX move
+  never rewrites history. A price seen again is not appended: per vehicle and
+  source it keeps the row of its first sighting and one row whose time moves to
+  the last sighting (`recordPrice`). A car seen every three hours at one price is
+  two rows, and the history chart still reaches its last sighting. Nothing else
+  updates or deletes a snapshot.
 
 ## Repositories
 

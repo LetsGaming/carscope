@@ -87,6 +87,7 @@ export class MarketService {
       : this.#vehicles.search({ ...criteria, text: "" }, true).length;
     const activePrices = active.map((v) => v.current_price).filter((p) => p > 0);
 
+    const cars = new Set(observations.map((o) => o.vehicleId)).size;
     const series = monthlySeries(observations);
     const current = describe(activePrices);
 
@@ -95,11 +96,11 @@ export class MarketService {
       series,
       bands: histogram(activePrices, BAND_SIZE_EUR),
       factors: this.#factors(all),
-      confidence: confidence(observations.length),
+      confidence: confidence(cars),
       medianDaysListed: medianDays(all),
       changeYearPct: yearOverYear(series),
       activeCount: active.length,
-      observationCount: observations.length,
+      observationCount: cars,
       excludedByText: Math.max(0, withoutText - active.length),
       heldCount: this.#vehicles.search(criteria, true, true).length,
       unknownCount: Math.max(0, this.#vehicles.search(criteria, true, false, true).length - active.length),
