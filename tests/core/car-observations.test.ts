@@ -61,6 +61,18 @@ test("a car sold in the middle of a month is priced as it was then", () => {
     "the later price came after the car was gone");
 });
 
+test("a car is not priced for months before it was first seen", () => {
+  // The portal says the advert is from January; the first observation is in August.
+  const car: CarHistory = {
+    vehicleId: "x", from: "2026-01-19", to: "2026-09-20T00:00:00.000Z",
+    prices: [{ observedAt: "2026-08-18T21:00:00.000Z", baseAmount: 26_990 }],
+  };
+
+  const rows = monthlyObservations([car], "2026-01-01");
+
+  assert.deepEqual(rows.map((r) => r.observedAt.slice(0, 7)), ["2026-08", "2026-09"]);
+});
+
 test("months before the window are not reported", () => {
   const car: CarHistory = {
     vehicleId: "x", from: "2026-01-05", to: "2026-04-05T00:00:00.000Z",

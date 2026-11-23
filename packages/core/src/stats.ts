@@ -99,7 +99,10 @@ export function monthlyObservations(
   for (const car of cars) {
     const first = car.prices[0];
     if (first === undefined) continue;
-    const startMonth = monthOf(car.from < sinceIso ? sinceIso : car.from);
+    // A car is priced from the day it was first seen, not from the day the portal says
+    // it was listed: nothing was observed before, and a price is not carried backwards.
+    const seenFrom = car.from > first.observedAt ? car.from : first.observedAt;
+    const startMonth = monthOf(seenFrom < sinceIso ? sinceIso : seenFrom);
     const lastMonth = monthOf(car.to);
     for (let month = startMonth; month <= lastMonth; month = nextMonth(month)) {
       const cutoff = monthEnd(month) < car.to ? monthEnd(month) : car.to;
