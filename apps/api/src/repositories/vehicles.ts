@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
-  holdReason, isDuplicate, isSameVehicle, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
+  holdReason, isDuplicate, matchRank, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
   type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
@@ -32,6 +32,7 @@ function toMatchInput(c: CandidateRow, market: Market, fallbackPrice: number): M
     gearbox: c.gearbox,
     title: c.title ?? [c.make, c.model, c.variant].filter(Boolean).join(" "),
     city: c.city,
+    postalCode: c.postal_code,
     sellerType: c.seller_type,
     ...(c.titles === null ? {} : { titles: c.titles.split(TITLE_SEPARATOR) }),
   };
@@ -83,6 +84,14 @@ function nameWords(title: string): string[] {
     .replace(/^(?:\s*(?:\[[^\]]*\]|\([^)]*\))|[^\p{L}\p{N}]+)+/u, "")
     .split(" ")
     .filter((w) => w !== "");
+}
+
+/** A car for sale beats an ended one; between equals the later sighting wins. */
+function isFresher(a: VehicleRow, b: VehicleRow): boolean {
+  const aLive = a.delisted_at === null;
+  const bLive = b.delisted_at === null;
+  if (aLive !== bLive) return aLive;
+  return a.last_seen_at > b.last_seen_at;
 }
 
 const VEHICLE_BY_ID = "SELECT * FROM vehicles WHERE id = ?";
@@ -312,6 +321,7 @@ export class VehicleRepository {
       gearbox: a.gearbox ?? null,
       title: raw.title,
       city: a.city ?? null,
+      postalCode: a.postalCode ?? null,
       sellerType: a.sellerType ?? null,
       titles: [raw.title],
     };
@@ -328,16 +338,20 @@ export class VehicleRepository {
          OR (? IS NOT NULL AND v.mileage_km BETWEEN ? AND ? AND lower(v.make) = lower(?))
          -- A re-posted advert keeps its town but not its price or odometer, and a
          -- sparse card keeps nothing else.
-         OR (? IS NOT NULL AND v.city = ? AND lower(v.make) = lower(?)))
+         OR (? IS NOT NULL AND v.city = ? AND lower(v.make) = lower(?))
+         OR (? IS NOT NULL AND v.postal_code = ? AND lower(v.make) = lower(?)))
     `), key, imageHash, mileage, mileage === null ? null : mileage - ATTRIBUTE_MILEAGE_KM,
-      mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make, a.city ?? null, a.city ?? null, make);
+      mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make,
+      a.city ?? null, a.city ?? null, make, a.postalCode ?? null, a.postalCode ?? null, make);
 
+    let best: { row: CandidateRow; rank: number } | null = null;
     for (const c of candidates) {
-      const existing = toMatchInput(c, a.market ?? market, raw.price);
-      if (isSameVehicle(incoming, existing)) {
-        this.#fillGaps(c, a, raw, now);
-        return { vehicle: toVehicle(this.#require(c.id)), created: false };
-      }
+      const rank = matchRank(incoming, toMatchInput(c, a.market ?? market, raw.price));
+      if (rank !== null && (best === null || rank > best.rank)) best = { row: c, rank };
+    }
+    if (best !== null) {
+      this.#fillGaps(best.row, a, raw, now);
+      return { vehicle: toVehicle(this.#require(best.row.id)), created: false };
     }
 
     const id = randomUUID();
@@ -455,9 +469,13 @@ export class VehicleRepository {
       // By town: the rules for re-posted and sparse adverts need no odometer.
       const towns = new Map<string, typeof group>();
       for (const x of group) {
-        if (!x.row.city) continue;
-        const key = x.row.city.toLowerCase();
-        towns.set(key, [...(towns.get(key) ?? []), x]);
+        const keys = [
+          x.row.postal_code ? `zip:${x.row.postal_code}` : null,
+          x.row.city ? `city:${x.row.city.toLowerCase()}` : null,
+        ];
+        for (const key of keys) {
+          if (key !== null) towns.set(key, [...(towns.get(key) ?? []), x]);
+        }
       }
       for (const inTown of towns.values()) {
         for (const [i, a] of inTown.entries()) for (const b of inTown.slice(i + 1)) meet(a, b);
@@ -484,25 +502,31 @@ export class VehicleRepository {
     return merged;
   }
 
-  /** Moves every advert and price of `dropId` onto `keepId`, then removes `dropId`. */
+  /**
+   * Moves every advert and price of `dropId` onto `keepId`, then removes `dropId`.
+   * The survivor is the row the caller names (the lower rowid), but each fact
+   * comes from the fresher of the two cars: after a re-post the old advert's
+   * odometer and registration are the stale ones.
+   */
   mergeInto(keepId: string, dropId: string): void {
     transaction(this.#db, () => {
       const keep = this.#require(keepId);
       const drop = this.#require(dropId);
+      const dropFresher = isFresher(drop, keep);
+      const [fresh, stale] = dropFresher ? [drop, keep] : [keep, drop];
 
       this.#db.prepare("UPDATE listings SET vehicle_id = ? WHERE vehicle_id = ?").run(keepId, dropId);
-      // A snapshot is keyed by vehicle, instant and source; a clash is the same
-      // observation twice, and the copy left behind goes with the dropped row.
-      this.#db.prepare("UPDATE OR IGNORE price_snapshots SET vehicle_id = ? WHERE vehicle_id = ?")
-        .run(keepId, dropId);
+      this.#moveSnapshots(keepId, dropId, dropFresher);
       if (this.#photoCount(dropId) > this.#photoCount(keepId)) {
         this.#db.prepare("DELETE FROM photos WHERE vehicle_id = ?").run(keepId);
         this.#db.prepare("UPDATE photos SET vehicle_id = ? WHERE vehicle_id = ?").run(keepId, dropId);
       }
 
-      const registration = (drop.first_registration ?? "").length > (keep.first_registration ?? "").length
-        ? drop.first_registration
-        : keep.first_registration;
+      const pick = <T>(f: T | null, o: T | null): T | null => f ?? o;
+      // A bare year and a full month are one fact at two precisions: the precise one wins.
+      const registration = (fresh.first_registration ?? "").length >= (stale.first_registration ?? "").length
+        ? pick(fresh.first_registration, stale.first_registration)
+        : stale.first_registration;
       const earliest = (x: string | null, y: string | null): string | null =>
         x === null ? y : y === null ? x : x < y ? x : y;
 
@@ -514,13 +538,13 @@ export class VehicleRepository {
           first_listed_at = ?, first_seen_at = ?, last_seen_at = ?, delisted_at = ?
         WHERE id = ?
       `).run(
-        registration, keep.variant ?? drop.variant, keep.body_style ?? drop.body_style,
-        keep.mileage_km ?? drop.mileage_km, keep.power_w ?? drop.power_w,
-        keep.fuel ?? drop.fuel, keep.gearbox ?? drop.gearbox,
-        keep.seller_type ?? drop.seller_type, keep.seller_name ?? drop.seller_name,
-        keep.postal_code ?? drop.postal_code, keep.city ?? drop.city,
-        keep.damaged ?? drop.damaged, keep.description ?? drop.description,
-        keep.image_hash ?? drop.image_hash, keep.detail_fetched_at ?? drop.detail_fetched_at,
+        registration, pick(fresh.variant, stale.variant), pick(fresh.body_style, stale.body_style),
+        pick(fresh.mileage_km, stale.mileage_km), pick(fresh.power_w, stale.power_w),
+        pick(fresh.fuel, stale.fuel), pick(fresh.gearbox, stale.gearbox),
+        pick(fresh.seller_type, stale.seller_type), pick(fresh.seller_name, stale.seller_name),
+        pick(fresh.postal_code, stale.postal_code), pick(fresh.city, stale.city),
+        pick(fresh.damaged, stale.damaged), pick(fresh.description, stale.description),
+        pick(fresh.image_hash, stale.image_hash), pick(fresh.detail_fetched_at, stale.detail_fetched_at),
         earliest(keep.first_listed_at, drop.first_listed_at),
         earliest(keep.first_seen_at, drop.first_seen_at) ?? keep.first_seen_at,
         keep.last_seen_at > drop.last_seen_at ? keep.last_seen_at : drop.last_seen_at,
@@ -532,6 +556,36 @@ export class VehicleRepository {
 
       this.#db.prepare("DELETE FROM vehicles WHERE id = ?").run(dropId);
     });
+  }
+
+  /**
+   * A snapshot is keyed by vehicle, instant and source. Two adverts of one car
+   * from one portal, seen in the same run, share all three, and ignoring the
+   * moved row lost a real price (25990 EUR of a live advert). A clashing row is
+   * placed a millisecond away instead: after the other when the moved car is
+   * fresher, before it otherwise, so the latest price stays the fresher advert's.
+   */
+  #moveSnapshots(keepId: string, dropId: string, dropFresher: boolean): void {
+    const rows = allRows<SnapshotRow>(this.#db.prepare(
+      "SELECT * FROM price_snapshots WHERE vehicle_id = ? ORDER BY observed_at",
+    ), dropId);
+    const taken = this.#db.prepare(
+      "SELECT 1 AS x FROM price_snapshots WHERE vehicle_id = ? AND observed_at = ? AND source_id = ?",
+    );
+    const insert = this.#db.prepare(`
+      INSERT INTO price_snapshots (vehicle_id, observed_at, source_id, amount, currency, base_amount, rate)
+      VALUES (?,?,?,?,?,?,?)
+    `);
+    const step = dropFresher ? 1 : -1;
+    for (const r of rows) {
+      let at = Date.parse(r.observed_at);
+      let iso = r.observed_at;
+      while (getRow<SqlRow>(taken, keepId, iso, r.source_id) !== undefined) {
+        at += step;
+        iso = new Date(at).toISOString();
+      }
+      insert.run(keepId, iso, r.source_id, r.amount, r.currency, r.base_amount, r.rate);
+    }
   }
 
   /**

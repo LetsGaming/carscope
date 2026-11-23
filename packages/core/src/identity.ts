@@ -46,6 +46,7 @@ export interface MatchInput extends IdentityInput {
   readonly gearbox?: string | null;
   /** Where the car stands. The same-place rules need it on both sides. */
   readonly city?: string | null;
+  readonly postalCode?: string | null;
   readonly sellerType?: string | null;
   /** Every advert title the car has; `title` alone is only the first. */
   readonly titles?: readonly string[];
@@ -158,11 +159,22 @@ export function isSparseMatch(a: MatchInput, b: MatchInput): boolean {
   return knownAttributesAgree(a, b);
 }
 
-/** Same make, same known town, and neither side a dealer. */
+/** Same make, same known place, and neither side a dealer. */
 function sameSeller(a: MatchInput, b: MatchInput): boolean {
   return normaliseName(a.make) === normaliseName(b.make)
-    && !!a.city && !!b.city && normaliseName(a.city) === normaliseName(b.city)
+    && samePlace(a, b)
     && a.sellerType !== "dealer" && b.sellerType !== "dealer";
+}
+
+/**
+ * The postal code decides when both sides state one: it separates two towns of
+ * one name and joins a district ("Altstadt-Lehel") to its city. Without codes
+ * on both sides the city decides. A place that is unknown on a side is not the
+ * same place.
+ */
+export function samePlace(a: MatchInput, b: MatchInput): boolean {
+  if (a.postalCode && b.postalCode) return a.postalCode === b.postalCode;
+  return !!a.city && !!b.city && normaliseName(a.city) === normaliseName(b.city);
 }
 
 const knownAttributeCount = (v: MatchInput): number =>
@@ -267,7 +279,7 @@ export function matchScore(a: MatchInput, b: MatchInput): number {
   let score = 0;
 
   if (a.imageHash !== null && a.imageHash === b.imageHash) score += WEIGHT.imageHash;
-  if (identityKey(a) === identityKey(b)) score += WEIGHT.identity;
+  if (identityKey(a) === identityKey(b) && identityIsKnown(a, b)) score += WEIGHT.identity;
   else if (normaliseName(a.make) === normaliseName(b.make)) score += WEIGHT.identity / 2;
   score += WEIGHT.title * titleOverlap(a.title, b.title);
 
@@ -292,5 +304,31 @@ export function matchScore(a: MatchInput, b: MatchInput): number {
 export const isDuplicate = (a: MatchInput, b: MatchInput): boolean =>
   isCertainMatch(a, b) || isAttributeMatch(a, b) || isSamePlaceMatch(a, b) || isSparseMatch(a, b);
 
+/**
+ * Two cards that state neither a registration nor a mileage have the same key
+ * ("nissan|skyline|x|x|DE") whatever they are. Unknown equals unknown only in
+ * the key, so the key counts as evidence only when something in it is known on
+ * both sides.
+ */
+function identityIsKnown(a: MatchInput, b: MatchInput): boolean {
+  return (a.firstRegistration !== null && b.firstRegistration !== null)
+    || (a.mileageKm !== null && b.mileageKm !== null);
+}
+
 export const isSameVehicle = (a: MatchInput, b: MatchInput): boolean =>
   isDuplicate(a, b) || matchScore(a, b) >= MATCH_THRESHOLD;
+
+/**
+ * How well a candidate fits, or null when it does not. Several stored cars can
+ * pass `isSameVehicle`; the one with the strongest rule, then the highest score,
+ * is the car, not whichever the database listed first.
+ */
+export function matchRank(a: MatchInput, b: MatchInput): number | null {
+  if (!isSameVehicle(a, b)) return null;
+  const tier = isCertainMatch(a, b) ? 4
+    : isAttributeMatch(a, b) ? 3
+      : isSamePlaceMatch(a, b) ? 2
+        : isSparseMatch(a, b) ? 1
+          : 0;
+  return tier * 10 + matchScore(a, b);
+}

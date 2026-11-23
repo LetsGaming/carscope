@@ -162,6 +162,19 @@ history is meaningless.
 The threshold is deliberately conservative. Duplicates are visible and annoying;
 a false merge silently corrupts a price series.
 
+Unknown is never evidence. Two cards that state neither a registration nor a
+mileage share the key `nissan|skyline|x|x|DE` whatever they are, so the key only
+counts when something in it is known on both sides. A Nismo card once joined the
+Rodenbach card that way. When several stored cars fit, `matchRank` picks the one
+with the strongest rule and then the highest score, not the first the database
+returns. Places compare by postal code when both sides have one (a district and
+its city share a code, two towns of one name do not) and by city otherwise.
+
+When two cars merge, each fact comes from the fresher one (for sale before
+ended, then the later sighting), because after a re-post the old advert's
+odometer and registration are the stale ones. Two prices seen at the same
+instant from the same source both stay: the clashing one moves a millisecond.
+
 Rules 3 to 6 also run over what is already stored, once at the end of every
 collection job (`VehicleRepository.consolidate`). A duplicate that predates a
 rule, or whose gearbox only arrived with the detail page, would otherwise stay
