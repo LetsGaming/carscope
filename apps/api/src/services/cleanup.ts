@@ -44,6 +44,7 @@ type Counts = ReturnType<VehicleRepository["counts"]>;
 export interface CleanupReport {
   readonly before: Counts;
   readonly after: Counts;
+  readonly renamed: number;
   readonly holdChanges: number;
   readonly repairs: readonly { why: string; moved: boolean }[];
   readonly merged: number;
@@ -72,6 +73,7 @@ export function runCleanup(deps: CleanupDeps): CleanupReport {
   const before = vehicles.counts();
   const marketBefore = marketLines(deps);
 
+  const renamed = vehicles.reinferNames();
   const holdChanges = vehicles.reassessAll();
   const repairs = KNOWN_REPAIRS.map((r) => ({
     why: r.why,
@@ -82,7 +84,7 @@ export function runCleanup(deps: CleanupDeps): CleanupReport {
   const snapshotsDeleted = vehicles.compactSnapshots();
 
   return {
-    before, after: vehicles.counts(), holdChanges, repairs, merged,
+    before, after: vehicles.counts(), renamed, holdChanges, repairs, merged,
     photosRelinked, snapshotsDeleted, marketBefore, marketAfter: marketLines(deps),
   };
 }

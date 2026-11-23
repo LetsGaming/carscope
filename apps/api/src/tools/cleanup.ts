@@ -72,6 +72,7 @@ function format(r: CleanupReport, applied: boolean): string {
   const lines = [
     applied ? "CLEANUP APPLIED" : "CLEANUP DRY RUN (a copy was changed, the database was not)",
     `before: ${row(r.before)}`,
+    `names:  ${String(r.renamed)} cars got the make and model their title names`,
     `hold:   ${String(r.holdChanges)} cars changed their held state`,
     ...r.repairs.map((x) => `repair: ${x.moved ? "moved" : "nothing to move"}: ${x.why}`),
     `merge:  ${String(r.merged)} cars merged into another`,

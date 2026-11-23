@@ -9,4 +9,4 @@ export * from "./images.ts";
 export * from "./ports.ts";
 export * from "./runner.ts";
 export * from "./adapters/index.ts";
-export { splitMakeModel } from "./adapters/make-model.ts";
+export { isKnownMake, splitMakeModel } from "./adapters/make-model.ts";

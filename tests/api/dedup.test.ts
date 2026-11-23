@@ -59,7 +59,8 @@ test("a duplicate stored before the gearbox was known is merged by consolidate",
   const vehicles = repo(t);
   const first = store(vehicles, "575913a6");
   // The aggregator's card carried no gearbox, so the two did not meet.
-  const second = store(vehicles, "88bde6f7", noGearbox("88bde6f7"));
+  // A price a little off (so the exact-price rule does not join them on arrival) and no gearbox.
+  const second = store(vehicles, "88bde6f7", { ...noGearbox("88bde6f7"), price: 44_400 });
   assert.equal(second.created, true);
 
   // The detail page then said "manual", which is what made them one car.

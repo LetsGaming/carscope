@@ -1,3 +1,4 @@
+import { PLACEHOLDER_PRICE_BELOW_EUR } from "./hold.ts";
 import type { Market } from "./vehicle.ts";
 
 export interface IdentityInput {
@@ -236,9 +237,31 @@ function bestTitleOverlap(a: MatchInput, b: MatchInput): number {
   return Math.max(0, ...left.flatMap((x) => right.map((y) => titleOverlap(headline(x), headline(y)))));
 }
 
+const priceIsUnknown = (v: MatchInput): boolean => v.priceBase < PLACEHOLDER_PRICE_BELOW_EUR;
+
+/**
+ * Cards that state no place and almost nothing else (aggregator cards) cannot
+ * meet the place rules. Exactly the same price and an advert text that says
+ * something specific, almost word for word, is what they can offer.
+ */
+export const DESCRIBED_TITLE_OVERLAP = 0.8;
+
+export function isDescribedMatch(a: MatchInput, b: MatchInput): boolean {
+  if (normaliseName(a.make) !== normaliseName(b.make)) return false;
+  if (priceIsUnknown(a) || a.priceBase !== b.priceBase) return false;
+  if (a.sellerType === "dealer" || b.sellerType === "dealer") return false;
+  if (titleIsQuiet(a) || titleIsQuiet(b)) return false;
+  const placed = (v: MatchInput): boolean => !!v.postalCode || !!v.city;
+  if (placed(a) && placed(b) && !samePlace(a, b)) return false;
+  if (!knownAttributesAgree(a, b)) return false;
+  return bestTitleOverlap(a, b) >= DESCRIBED_TITLE_OVERLAP;
+}
+
 /** A quiet side is let through by title, and held to a close price instead. */
 function titlesAllow(a: MatchInput, b: MatchInput): boolean {
   if (titleIsQuiet(a) || titleIsQuiet(b)) {
+    // A card that states no price says nothing about the price.
+    if (priceIsUnknown(a) || priceIsUnknown(b)) return true;
     const spread = Math.abs(a.priceBase - b.priceBase) / Math.max(a.priceBase, b.priceBase, 1);
     return spread <= PLACE_QUIET_PRICE_SPREAD;
   }
@@ -325,7 +348,8 @@ export function matchScore(a: MatchInput, b: MatchInput): number {
 
 /** The two rules that need no scoring: one car advertised twice. */
 export const isDuplicate = (a: MatchInput, b: MatchInput): boolean =>
-  isCertainMatch(a, b) || isAttributeMatch(a, b) || isSamePlaceMatch(a, b) || isSparseMatch(a, b);
+  isCertainMatch(a, b) || isAttributeMatch(a, b) || isSamePlaceMatch(a, b) || isSparseMatch(a, b)
+  || isDescribedMatch(a, b);
 
 /**
  * Two cards that state neither a registration nor a mileage have the same key
@@ -351,7 +375,7 @@ export function matchRank(a: MatchInput, b: MatchInput): number | null {
   const tier = isCertainMatch(a, b) ? 4
     : isAttributeMatch(a, b) ? 3
       : isSamePlaceMatch(a, b) ? 2
-        : isSparseMatch(a, b) ? 1
+        : isSparseMatch(a, b) || isDescribedMatch(a, b) ? 1
           : 0;
   return tier * 10 + matchScore(a, b);
 }

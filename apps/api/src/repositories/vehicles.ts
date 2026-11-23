@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
-  ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
+  ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, EMPTY_CRITERIA, displayName, identityKey, inferPeriod,
   emptyRange, holdReason, isDuplicate, matchRank, variantWithoutName, monthlyObservations, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
   type CarObservation, type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
 } from "@carscope/core";
-import type { ResolvedVehicle } from "@carscope/collector";
+import { isKnownMake, splitMakeModel, type ResolvedVehicle } from "@carscope/collector";
 import { allRows, changed, getRow, transaction, type Db, type SqlRow } from "../db/index.ts";
 import { buildFilter, HELD_EXCLUDED, HIDDEN_EXCLUDED, NOT_WANTED, searchWords, textClause, type Param, type ResultRow } from "./filter.ts";
 import {
@@ -34,7 +34,8 @@ function toMatchInput(c: CandidateRow, market: Market, fallbackPrice: number): M
     city: c.city,
     postalCode: c.postal_code,
     sellerType: c.seller_type,
-    ...(c.titles === null ? {} : { titles: c.titles.split(TITLE_SEPARATOR) }),
+    // An aggregator card keeps its words in the subtitle, which is the stored variant.
+    titles: [...(c.titles === null ? [] : c.titles.split(TITLE_SEPARATOR)), ...(c.variant === null ? [] : [c.variant])],
   };
 }
 
@@ -55,6 +56,10 @@ interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; phot
 interface ListingOwnerRow extends SqlRow { vehicle_id: string }
 interface CountRow extends SqlRow { n: number }
 interface IdRow extends SqlRow { id: string }
+interface NameRow extends SqlRow {
+  id: string; make: string; model: string; first_registration: string | null;
+  mileage_km: number | null; market: string; title: string | null;
+}
 interface CountsRow extends SqlRow {
   vehicles: number; listed: number; held: number; hidden: number;
   listings: number; snapshots: number; photos: number; photos_on_disk: number;
@@ -323,9 +328,10 @@ export class VehicleRepository {
     // Settled once, on the way in, so one portal shouting does not put the same
     // car in the list twice over in two spellings. The identity key case-folds
     // anyway, so this changes what is read, not what is matched.
+    const guess = splitMakeModel({ ...EMPTY_CRITERIA, text: raw.title });
     const named = nameWords(raw.title);
-    const make = displayName(a.make ?? named[0] ?? "unknown");
-    const model = displayName(a.model ?? named.slice(1, 2).join(" ") ?? "unknown");
+    const make = displayName(a.make ?? guess.make ?? named[0] ?? "unknown");
+    const model = displayName(a.model ?? guess.model ?? named.slice(1, 2).join(" ") ?? "unknown");
     const bare = variantWithoutName(a.variant, make, model);
     const variant = bare === null ? null : displayName(bare);
     const key = identityKey({
@@ -350,7 +356,7 @@ export class VehicleRepository {
       city: a.city ?? null,
       postalCode: a.postalCode ?? null,
       sellerType: a.sellerType ?? null,
-      titles: [raw.title],
+      titles: a.variant === undefined || a.variant === null ? [raw.title] : [raw.title, a.variant],
     };
 
     const mileage = a.mileageKm ?? null;
@@ -366,10 +372,15 @@ export class VehicleRepository {
          -- A re-posted advert keeps its town but not its price or odometer, and a
          -- sparse card keeps nothing else.
          OR (? IS NOT NULL AND v.city = ? AND lower(v.make) = lower(?))
-         OR (? IS NOT NULL AND v.postal_code = ? AND lower(v.make) = lower(?)))
+         OR (? IS NOT NULL AND v.postal_code = ? AND lower(v.make) = lower(?))
+         -- A card with no place and no mileage can only be told by its price and its words.
+         OR (? >= ${PLACEHOLDER_PRICE_BELOW_EUR} AND lower(v.make) = lower(?) AND (
+           SELECT ps.base_amount FROM price_snapshots ps
+           WHERE ps.vehicle_id = v.id ORDER BY ps.observed_at DESC LIMIT 1) = ?))
     `), key, imageHash, mileage, mileage === null ? null : mileage - ATTRIBUTE_MILEAGE_KM,
       mileage === null ? null : mileage + ATTRIBUTE_MILEAGE_KM, make,
-      a.city ?? null, a.city ?? null, make, a.postalCode ?? null, a.postalCode ?? null, make);
+      a.city ?? null, a.city ?? null, make, a.postalCode ?? null, a.postalCode ?? null, make,
+      raw.price, make, raw.price);
 
     let best: { row: CandidateRow; rank: number } | null = null;
     for (const c of candidates) {
@@ -533,6 +544,13 @@ export class VehicleRepository {
       }
       for (const inTown of towns.values()) {
         for (const [i, a] of inTown.entries()) for (const b of inTown.slice(i + 1)) meet(a, b);
+      }
+
+      // By price: cards that state no place meet only by price and words.
+      const priced = new Map<number, typeof group>();
+      for (const x of group) priced.set(x.input.priceBase, [...(priced.get(x.input.priceBase) ?? []), x]);
+      for (const same of priced.values()) {
+        for (const [i, a] of same.entries()) for (const b of same.slice(i + 1)) meet(a, b);
       }
     }
 
@@ -726,6 +744,35 @@ export class VehicleRepository {
       }
       return deleted;
     });
+  }
+
+  /**
+   * Gives a car the make and model its title names when the stored make is not a
+   * make. A title that starts with a year ("1999 Nissan Skyline R34") once made
+   * the make "1999". Returns how many cars changed.
+   */
+  reinferNames(): number {
+    const rows = allRows<NameRow>(this.#db.prepare(`
+      SELECT v.id, v.make, v.model, v.first_registration, v.mileage_km, v.market,
+        (SELECT l.title FROM listings l WHERE l.vehicle_id = v.id ORDER BY l.first_seen_at LIMIT 1) AS title
+      FROM vehicles v
+    `));
+    let renamed = 0;
+    for (const r of rows) {
+      if (r.title === null || isKnownMake(r.make)) continue;
+      const guess = splitMakeModel({ ...EMPTY_CRITERIA, text: r.title });
+      const market = toMarket(r.market);
+      if (guess.make === null || guess.model === null || market === null) continue;
+      const make = displayName(guess.make);
+      const model = displayName(guess.model);
+      const key = identityKey({
+        make, model, firstRegistration: r.first_registration, mileageKm: r.mileage_km, market, sellerName: null,
+      });
+      this.#db.prepare("UPDATE vehicles SET make = ?, model = ?, identity_key = ? WHERE id = ?")
+        .run(make, model, key, r.id);
+      renamed += 1;
+    }
+    return renamed;
   }
 
   /** Every vehicle id, for the maintenance tools. */
