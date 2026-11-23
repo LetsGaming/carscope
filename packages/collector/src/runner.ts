@@ -1,6 +1,6 @@
 import {
   HOUR_MS, MINUTE_MS,
-  FAILURE, convert, marketsFor,
+  FAILURE, convert, marketsFor, portalCriteria,
   type Criteria, type QueryContext, type QueryHints,
   type RawListing, type SourceAdapter,
 } from "@carscope/core";
@@ -62,7 +62,8 @@ export async function collect(
   search: SavedSearch,
 ): Promise<CollectionRun> {
   const startedAt = deps.now().toISOString();
-  const hints = await resolveHints(deps, adapter, search.criteria);
+  const asked: SavedSearch = { ...search, criteria: portalCriteria(search.criteria) };
+  const hints = await resolveHints(deps, adapter, asked.criteria);
   const markets = marketsFor(search.criteria, adapter.markets);
 
   const totals = { fetched: 0, kept: 0, created: 0, merged: 0, photos: 0, dropped: 0 };
@@ -89,7 +90,7 @@ export async function collect(
     // means the last country asked never gets a turn.
     const marketDeadline = Math.min(deadline, deps.now().getTime() + deps.options.sourceDeadlineMs);
     const pass = await collectMarket(
-      deps, adapter, search, { market, hints }, marketDeadline, seenIds, totals, details, notes,
+      deps, adapter, asked, { market, hints }, marketDeadline, seenIds, totals, details, notes,
     );
     if (pass.note !== null) notes.push(`${market}: ${pass.note}`);
     if (!pass.complete) complete = false;
@@ -99,7 +100,8 @@ export async function collect(
     }
   }
 
-  const delisted = deps.store.markDelisted(adapter.id, seenIds, deps.now().toISOString(), startedAt);
+  // A read that stopped early did not see every car, and a car it did not see is not a car that left.
+  const delisted = complete ? deps.store.markDelisted(adapter.id, seenIds, deps.now().toISOString(), startedAt) : 0;
   if (totals.dropped > 0) {
     notes.push(`${String(totals.dropped)} Treffer nachträglich aussortiert`);
   }
@@ -146,6 +148,7 @@ async function collectMarket(
   details: DetailBudget,
   notes: string[],
 ): Promise<MarketPass> {
+  const pageSeen = new Set<string>();
   for (let page = 1; page <= deps.options.maxPages; page += 1) {
     if (deps.now().getTime() > deadline) {
       return { status: RUN_STATUS.error, complete: false, note: "Zeitlimit erreicht" };
@@ -169,6 +172,10 @@ async function collectMarket(
 
     const parsed = adapter.parseList(body.value, spec);
     if (!parsed.ok) return { status: RUN_STATUS.error, complete: false, note: parsed.error.message };
+
+    const pageIds = parsed.value.listings.map((l) => l.sourceListingId);
+    const newOnThisPage = pageIds.filter((id) => !pageSeen.has(id)).length;
+    for (const id of pageIds) pageSeen.add(id);
 
     if (parsed.value.note !== undefined) notes.push(parsed.value.note);
     totals.fetched += parsed.value.listings.length;
@@ -236,7 +243,10 @@ async function collectMarket(
 
     }
 
-    if (!parsed.value.hasMore) return { status: RUN_STATUS.ok, complete: true, note: null };
+    // A page with nothing new is the portal showing its last page again.
+    if (!parsed.value.hasMore || (page > 1 && newOnThisPage === 0)) {
+      return { status: RUN_STATUS.ok, complete: true, note: null };
+    }
 
     // Stopping at the page limit while the portal still has results is a partial
     // answer, and a partial answer that says nothing looks like a complete one.

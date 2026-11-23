@@ -7,7 +7,7 @@ const emit = defineEmits<{ release: [id: string] }>();
 
 const REASON: Readonly<Record<string, string>> = {
   wanted: "Gesuch",
-  placeholder_price: "Platzhalterpreis",
+  placeholder_price: "Preis fehlt oder Platzhalter",
 };
 </script>
 

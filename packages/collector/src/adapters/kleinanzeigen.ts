@@ -56,6 +56,8 @@ export const kleinanzeigen: SourceAdapter = {
     const { make, model } = splitMakeModel(c);
     const segments: string[] = [];
     if (make !== null) segments.push(normaliseMake(make));
+    // Without this the results hold the buyers' adverts too ("Suche R32 GTR ...").
+    segments.push("anzeige:angebote");
     segments.push("sortierung:empfohlen");
     if (c.sellerType) segments.push(`anbieter:${SELLER[c.sellerType] ?? ""}`);
     if (c.priceEur.min !== null || c.priceEur.max !== null) {
@@ -94,13 +96,15 @@ export const kleinanzeigen: SourceAdapter = {
     const galleries = galleriesFrom(body);
     const listings = articles
       .flatMap(toRawListing)
+      // A top advert is listed twice on one page.
+      .filter((listing, i, all) => all.findIndex((l) => l.sourceListingId === listing.sourceListingId) === i)
       .map((listing) => {
         const gallery = galleries.get(listing.sourceListingId);
         return gallery === undefined || gallery.length <= listing.photoUrls.length
           ? listing
           : { ...listing, photoUrls: gallery };
       });
-    return ok({ listings, hasMore: listings.length > 0 });
+    return ok({ listings, hasMore: hasMorePages(body, listings.length) });
   },
 
   /** The list article carries one thumbnail and a teaser; the ad page has both in full. */
@@ -120,6 +124,19 @@ export const kleinanzeigen: SourceAdapter = {
     });
   },
 };
+
+/**
+ * Whether the portal has another page. A page past the end shows the last page
+ * again, so "this page had cars" says nothing. The page states its own range
+ * ("26 - 40 von 40") and links "Nächste" only while one follows. With neither,
+ * the runner stops at the first page that adds nothing new.
+ */
+function hasMorePages(body: string, shown: number): boolean {
+  const range = /id="srp-breadcrumb-summary"[^>]*>\s*(\d[\d.]*)\s*-\s*(\d[\d.]*)\s*von\s*(\d[\d.]*)/.exec(body);
+  if (range !== null) return (germanNumber(range[2]) ?? 0) < (germanNumber(range[3]) ?? 0);
+  if (body.includes('aria-label="Nächste"')) return true;
+  return shown > 0;
+}
 
 /**
  * The "Details" list of an ad page: `<li>Getriebe<span class="...value"> Manuell</span></li>`.
@@ -228,8 +245,9 @@ function toRawListing(article: string): RawListing[] {
   const contentUrl = isRecord(image) ? asString(image["contentUrl"]) : null;
 
   const text = visibleText(article);
-  const price = germanNumber(/(\d[\d.]*)\s*€/.exec(text)?.[1]);
-  if (price === null) return [];
+  // A card that shows only "VB" states no amount. It is stored with 0, which holds
+  // it until a price appears, instead of dropping a car that is on sale.
+  const price = germanNumber(/(\d[\d.]*)\s*€/.exec(text)?.[1]) ?? 0;
 
   // The location has its own element; in the flattened text it runs into the
   // posting date that sits next to it.

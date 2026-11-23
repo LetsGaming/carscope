@@ -118,6 +118,18 @@ export function invalidRanges(c: Criteria): CriterionKey[] {
   return pairs.filter(([, r]) => !rangeIsValid(r)).map(([k]) => k);
 }
 
+/**
+ * What a portal is asked, as opposed to what the reader sees. A price, a
+ * mileage or a power range sent to the portal makes a car vanish from the
+ * answer the day it is repriced across the limit, and the run reads that as
+ * "removed". Cards show no power at all, so a power range also drops every
+ * car whose seller left it out. These are applied when the list is built, from
+ * what was stored; the portal only narrows by what never changes on a car.
+ */
+export function portalCriteria(c: Criteria): Criteria {
+  return { ...c, priceEur: emptyRange(), mileageKm: emptyRange(), powerPs: emptyRange() };
+}
+
 /** Search words, lowercased and stripped of separators. */
 export function textTokens(text: string): string[] {
   return text

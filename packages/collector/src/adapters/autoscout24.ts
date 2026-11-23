@@ -122,9 +122,10 @@ function fullSizeImage(url: string): string {
 function toRaw(node: unknown, host: string): RawListing[] {
   if (!isRecord(node)) return [];
   const id = asString(node["id"]);
-  const price = asNumber(pick(node, ["price", "priceRaw"]));
+  // No price is stored as 0, which holds the car until one appears.
+  const price = asNumber(pick(node, ["price", "priceRaw"])) ?? 0;
   const path = asString(node["url"]);
-  if (!id || price === null) return [];
+  if (!id) return [];
 
   const vehicle = pick(node, ["vehicle"]);
   const details = node["vehicleDetails"];

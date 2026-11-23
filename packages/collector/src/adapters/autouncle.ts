@@ -194,8 +194,8 @@ export function domListings(html: string, searchUrl: string): RawListing[] {
     if (link === null) continue;
 
     const flat = visibleText(article);
-    const price = germanNumber(PRICE.exec(flat)?.[1]);
-    if (price === null) continue;
+    // No price is stored as 0, which holds the car until one appears.
+    const price = germanNumber(PRICE.exec(flat)?.[1]) ?? 0;
 
     const title = decodeEntities(TITLE.exec(article)?.[1] ?? "").trim();
     const alt = decodeEntities(ALT.exec(article)?.[1] ?? "");

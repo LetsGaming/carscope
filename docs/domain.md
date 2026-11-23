@@ -184,6 +184,26 @@ moves the listings and price snapshots over. Hidden cars are not merged. Photos
 of an advert that was still being fetched while its vehicle was merged can fail
 to save; the next run repeats them.
 
+## What a portal is asked
+
+The portal is asked for make, model, registration years and the other things
+that never change on a car (`portalCriteria` in `packages/core/src/criteria.ts`).
+Price, mileage and power are not sent to any portal; they are applied when the
+list is built. Sending them has three costs, all seen on prod:
+
+- A car repriced above the limit leaves the results, and the run read that as
+  "removed". A live Kleinanzeigen car (49000 EUR) was stored as ended at 40000.
+- A power range drops every car whose seller left power out. Cards show no
+  power, so the portal filter was the only check, and it cut 6 candidates to 2.
+- Cards without a power cannot be checked afterwards either.
+
+A run marks cars as removed only after it read every page. A page that adds no
+unseen advert ends the read (the portal shows its last page again for any page
+past the end), and Kleinanzeigen states its own range ("26 - 40 von 40"). Its
+query asks for offers only (`anzeige:angebote`); without that the results hold
+the buyers' adverts, which is where the wanted ads on prod came from. A card
+that shows no amount ("VB") is stored with price 0 and held until one appears.
+
 ## Held listings
 
 Some adverts are not cars for sale. They are stored, because the next run has
@@ -196,7 +216,8 @@ again after every price and every detail page, so a hold lifts itself.
   of the car's name. "Suche neuen Besitzer" and "suche keinen Tausch" are
   sellers. A wanted ad never takes part in duplicate matching. Its km and
   registration are the buyer's limits, not a car's.
-- **placeholder_price:** under 100 EUR (Kleinanzeigen shows "VB" as 1 EUR), or a
+- **placeholder_price:** under 100 EUR (Kleinanzeigen shows "VB" as 1 EUR, and a
+  card that states no amount at all is stored as 0), or a
   description that calls the price a placeholder. Digit patterns such as 44444
   decide nothing: that is a price some sellers choose on purpose. The car is
   listed as soon as it reports a real price.
