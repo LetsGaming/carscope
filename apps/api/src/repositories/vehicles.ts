@@ -775,6 +775,26 @@ export class VehicleRepository {
     return renamed;
   }
 
+  /**
+   * Forgets an image hash that many cars share. A hash is evidence only when a
+   * car or two have it; one that every card of a portal carries says nothing.
+   * Returns how many cars lost theirs.
+   */
+  clearSharedImageHashes(minCars: number): number {
+    return changed(this.#db.prepare(`
+      UPDATE vehicles SET image_hash = NULL
+      WHERE image_hash IN (SELECT image_hash FROM vehicles WHERE image_hash IS NOT NULL
+                           GROUP BY image_hash HAVING COUNT(*) >= ?)
+    `).run(minCars));
+  }
+
+  /** Deletes cars that no longer hold an advert, left behind when their adverts moved. */
+  removeEmptyVehicles(): number {
+    return changed(this.#db.prepare(
+      "DELETE FROM vehicles WHERE NOT EXISTS (SELECT 1 FROM listings l WHERE l.vehicle_id = vehicles.id)",
+    ).run());
+  }
+
   /** Every vehicle id, for the maintenance tools. */
   vehicleIds(): string[] {
     return allRows<IdRow>(this.#db.prepare("SELECT id FROM vehicles ORDER BY rowid")).map((r) => r.id);

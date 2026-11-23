@@ -28,7 +28,20 @@ export const KNOWN_REPAIRS: readonly Repair[] = [{
   into: { sourceId: "kleinanzeigen", listingId: "3562811585" },
   amount: 40_000,
   why: "AutoUncle card 'Nissan Skyline Nismo 280 PS' (1999, 40000 EUR) joined the Rodenbach car; it is the Magdeburg car",
+}, {
+  advert: { sourceId: "autouncle", listingId: "227785942" },
+  into: { sourceId: "kleinanzeigen", listingId: "3526635600" },
+  amount: 49_999,
+  why: "AutoUncle card 'R34 Z-Tune Umbau' (Lennestadt, 49999 EUR) joined a Potsdam car; it is the Lennestadt car",
+}, {
+  advert: { sourceId: "autouncle", listingId: "228510151" },
+  into: { sourceId: "autoscout24", listingId: "5db34c8f-2b6e-48d4-b7c9-528d56b31c8b" },
+  amount: 49_999,
+  why: "AutoUncle card 'R34 25 GT-T Optikpaket GTR' (Potsdam, 49999 EUR) sat on a car with the Lennestadt card; it is the Potsdam car",
 }];
+
+/** A hash that this many cars share is a portal's stock photo, not a car's. */
+const SHARED_HASH_MIN_CARS = 5;
 
 export interface MarketLine {
   readonly search: string;
@@ -45,6 +58,8 @@ export interface CleanupReport {
   readonly before: Counts;
   readonly after: Counts;
   readonly renamed: number;
+  readonly hashesCleared: number;
+  readonly emptied: number;
   readonly holdChanges: number;
   readonly repairs: readonly { why: string; moved: boolean }[];
   readonly merged: number;
@@ -74,17 +89,19 @@ export function runCleanup(deps: CleanupDeps): CleanupReport {
   const marketBefore = marketLines(deps);
 
   const renamed = vehicles.reinferNames();
+  const hashesCleared = vehicles.clearSharedImageHashes(SHARED_HASH_MIN_CARS);
   const holdChanges = vehicles.reassessAll();
   const repairs = KNOWN_REPAIRS.map((r) => ({
     why: r.why,
     moved: vehicles.moveListing(r.advert, r.into, r.amount),
   }));
+  const emptied = vehicles.removeEmptyVehicles();
   const merged = vehicles.consolidate();
   const photosRelinked = deps.dataDir === null ? null : relinkFromDisk(vehicles, deps.dataDir);
   const snapshotsDeleted = vehicles.compactSnapshots();
 
   return {
-    before, after: vehicles.counts(), renamed, holdChanges, repairs, merged,
+    before, after: vehicles.counts(), renamed, hashesCleared, emptied, holdChanges, repairs, merged,
     photosRelinked, snapshotsDeleted, marketBefore, marketAfter: marketLines(deps),
   };
 }

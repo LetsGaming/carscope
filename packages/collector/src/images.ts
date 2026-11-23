@@ -35,6 +35,22 @@ export interface StoredPhoto {
 }
 
 /**
+ * A resize proxy carries the picture in a parameter:
+ * `images.autouncle.com/de/resize?url=de%2Fcar_images%2F<id>_1999-nissan.webp&w=400`.
+ * Cutting the query off left `de/resize` for every picture, so all cards of the
+ * portal shared one hash, and any two with the same price and title merged.
+ */
+function assetOf(url: string): string {
+  const inner = /[?&](?:amp;)?url=([^&]+)/.exec(url)?.[1];
+  if (inner === undefined) return url;
+  try {
+    return decodeURIComponent(inner);
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Cheap perceptual proxy: the ordered set of source image URLs, stripped of
  * size and cache tokens. Dealers cross-posting the same car reuse the same asset
  * paths, which is what makes cross-portal dedup work before anything is fetched.
@@ -43,7 +59,7 @@ export function imageSetHash(urls: readonly string[]): string | null {
   if (urls.length === 0) return null;
   const normalised = urls
     .slice(0, MAX_PHOTOS_PER_VEHICLE)
-    .map((u) => u.replace(/\/\d+x\d+(?=\.\w+$)/, "").replace(/\?.*$/, "").split("/").slice(-2).join("/"))
+    .map((u) => assetOf(u).replace(/\/\d+x\d+(?=\.\w+$)/, "").replace(/\?.*$/, "").split("/").slice(-2).join("/"))
     .sort();
   return createHash("sha1").update(normalised.join("|")).digest("hex").slice(0, 16);
 }

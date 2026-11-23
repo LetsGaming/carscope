@@ -149,16 +149,49 @@ test("the cleanup repairs, merges, relinks and compacts in one pass, and a secon
 
   const first = runCleanup({ vehicles: s.vehicles, searches: s.searches, market: s.market, dataDir });
 
-  assert.deepEqual(first.repairs.map((r) => r.moved), [true]);
+  assert.deepEqual(first.repairs.map((r) => r.moved), [true, false, false], "only the Nismo advert exists here");
   assert.equal(first.photosRelinked, 1);
   assert.equal(s.vehicles.findById(magdeburg)?.listings.length, 2);
   assert.equal(s.vehicles.findById(rodenbach)?.listings.length, 1);
   assert.equal(first.marketAfter[0]?.search, "Skyline");
 
   const second = runCleanup({ vehicles: s.vehicles, searches: s.searches, market: s.market, dataDir });
-  assert.deepEqual(second.repairs.map((r) => r.moved), [false]);
+  assert.deepEqual(second.repairs.map((r) => r.moved), [false, false, false]);
   assert.equal(second.merged, 0);
   assert.equal(second.photosRelinked, 0);
   assert.equal(second.snapshotsDeleted, 0);
   assert.deepEqual(second.after, first.after);
+});
+
+test("a hash that many cars share is forgotten, one that two cars share is kept", (t) => {
+  const s = setup(t);
+  const ids = ["a", "b", "c", "d", "e"].map((n, i) => advert(s.vehicles, {
+    source: "autouncle", id: n, title: `Nissan Skyline ${n}`, price: 30_000 + i * 5_000, hours: i,
+    attrs: { mileageKm: 50_000 + i * 20_000 },
+  }));
+  s.vehicles.setImageHash(ids[0] ?? "", "stock");
+  s.vehicles.setImageHash(ids[1] ?? "", "stock");
+  s.vehicles.setImageHash(ids[2] ?? "", "stock");
+  s.vehicles.setImageHash(ids[3] ?? "", "pair");
+  s.vehicles.setImageHash(ids[4] ?? "", "pair");
+
+  assert.equal(s.vehicles.clearSharedImageHashes(3), 3);
+  assert.equal(
+    s.db.prepare("SELECT COUNT(*) AS n FROM vehicles WHERE image_hash = 'pair'").get()?.["n"], 2,
+  );
+});
+
+test("a car that no longer holds an advert is removed", (t) => {
+  const s = setup(t);
+  const id = advert(s.vehicles, {
+    source: "autouncle", id: "a", title: "Nissan Skyline", price: 30_000, hours: 0, attrs: { mileageKm: 50_000 },
+  });
+  advert(s.vehicles, {
+    source: "autouncle", id: "b", title: "Nissan Skyline", price: 60_000, hours: 1, attrs: { mileageKm: 150_000 },
+  });
+  s.db.prepare("DELETE FROM listings WHERE vehicle_id = ?").run(id);
+
+  assert.equal(s.vehicles.removeEmptyVehicles(), 1);
+  assert.equal(s.vehicles.findById(id), null);
+  assert.equal(s.vehicles.counts().vehicles, 1);
 });

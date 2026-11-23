@@ -63,12 +63,23 @@ test("it does not matter which of the two adverts arrives first", (t) => {
   assert.equal(vehicles.consolidate(), 0, "nothing left for the end-of-job pass");
 });
 
-test("a dealer's stock is not merged by price and words alone", (t) => {
+test("a dealer's cards meet by price and words only when the words are many and specific", (t) => {
   const { vehicles } = setup(t);
   see(vehicles, "autoscout24", AUTOSCOUT);
   see(vehicles, "autouncle", AUTOUNCLE_CARD);
+  assert.equal(vehicles.counts().vehicles, 1, "seven specific words in common: Z-Tune, Midnight, OEM, ...");
 
-  assert.equal(vehicles.counts().vehicles, 2, "a dealer can hold two cars at one price");
+  // A dealer can hold two cars of one model at one price; "R34 GTT" is not specific enough.
+  const { vehicles: stock } = setup(t);
+  see(stock, "autoscout24", {
+    ...AUTOSCOUT, sourceListingId: "as9", title: "Nissan Skyline R34 GTT",
+    attributes: { ...AUTOSCOUT.attributes, sellerType: "dealer" },
+  });
+  see(stock, "autouncle", {
+    ...AUTOUNCLE_CARD, sourceListingId: "au9",
+    attributes: { make: "Nissan", model: "Skyline", market: "DE", variant: "R34 GTT" },
+  });
+  assert.equal(stock.counts().vehicles, 2);
 });
 
 test("the same price with other words is another car", (t) => {

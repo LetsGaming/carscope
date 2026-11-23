@@ -162,6 +162,21 @@ history is meaningless.
 The threshold is deliberately conservative. Duplicates are visible and annoying;
 a false merge silently corrupts a price series.
 
+A card with no place, no mileage and no registration (every AutoUncle card) can
+only be told by its price and its words. `isDescribedMatch` joins two such cards
+when the price is exactly equal and the specific words of their titles and
+subtitles agree to 0.8 (words that are not make, model, year, power or filler,
+at least two on each side). A dealer's cards need four shared specific words,
+because a dealer can hold two cars of one model at one price.
+
+The image hash is evidence only when it tells pictures apart. AutoUncle serves
+its pictures through a resize URL that holds the file name in a `url=` parameter;
+the hash used to cut that parameter off, so all cards of the portal shared one
+hash, and any two with the same price and a similar title scored 0.72 and merged.
+That is how the Nismo card joined the Rodenbach car, and how a Potsdam and a
+Lennestadt car came to share one vehicle at 49999 EUR. The hash now reads the
+file name, and the cleanup forgets a hash that five or more cars share.
+
 Unknown is never evidence. Two cards that state neither a registration nor a
 mileage share the key `nissan|skyline|x|x|DE` whatever they are, so the key only
 counts when something in it is known on both sides. A Nismo card once joined the

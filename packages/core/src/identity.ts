@@ -221,11 +221,21 @@ const headline = (title: string): string => title.split("|")[0] ?? title;
  * contradicts by title.
  */
 function titleIsQuiet(v: MatchInput): boolean {
+  return !(v.titles ?? [v.title]).some((t) => specificWords(t, v).size >= MIN_DISTINCTIVE_WORDS);
+}
+
+/** The words of a title that name this car apart from every other of its make and model. */
+function specificWords(title: string, v: MatchInput): Set<string> {
   const named = new Set(textTokensOf(`${v.make} ${v.model}`));
-  return !(v.titles ?? [v.title]).some((t) =>
-    textTokensOf(headline(t)).filter((w) =>
-      w.length >= MIN_WORD_CHARS && !/^\d+$/.test(w) && !named.has(w) && !FILLER_TITLE_WORDS.has(w),
-    ).length >= MIN_DISTINCTIVE_WORDS);
+  return new Set(textTokensOf(headline(title)).filter((w) =>
+    w.length >= MIN_WORD_CHARS && !/^\d+$/.test(w) && !named.has(w) && !FILLER_TITLE_WORDS.has(w)));
+}
+
+/** The most specific words one title of each car has in common. */
+function sharedSpecificWords(a: MatchInput, b: MatchInput): number {
+  const left = (a.titles ?? [a.title]).map((t) => specificWords(t, a));
+  const right = (b.titles ?? [b.title]).map((t) => specificWords(t, b));
+  return Math.max(0, ...left.flatMap((l) => right.map((r) => [...l].filter((w) => r.has(w)).length)));
 }
 
 const textTokensOf = (text: string): string[] => normaliseName(text).split(" ").filter(Boolean);
@@ -245,12 +255,15 @@ const priceIsUnknown = (v: MatchInput): boolean => v.priceBase < PLACEHOLDER_PRI
  * something specific, almost word for word, is what they can offer.
  */
 export const DESCRIBED_TITLE_OVERLAP = 0.8;
+/** A dealer may hold two cars at one price, so a dealer's cards need this many shared specific words. */
+export const DESCRIBED_DEALER_SHARED_WORDS = 4;
 
 export function isDescribedMatch(a: MatchInput, b: MatchInput): boolean {
   if (normaliseName(a.make) !== normaliseName(b.make)) return false;
   if (priceIsUnknown(a) || a.priceBase !== b.priceBase) return false;
-  if (a.sellerType === "dealer" || b.sellerType === "dealer") return false;
   if (titleIsQuiet(a) || titleIsQuiet(b)) return false;
+  const dealer = a.sellerType === "dealer" || b.sellerType === "dealer";
+  if (dealer && sharedSpecificWords(a, b) < DESCRIBED_DEALER_SHARED_WORDS) return false;
   const placed = (v: MatchInput): boolean => !!v.postalCode || !!v.city;
   if (placed(a) && placed(b) && !samePlace(a, b)) return false;
   if (!knownAttributesAgree(a, b)) return false;
