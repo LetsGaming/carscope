@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   ATTRIBUTE_MILEAGE_KM, BASE_CURRENCY, DAY_MS, displayName, identityKey, inferPeriod,
-  emptyRange, holdReason, isDuplicate, matchRank, monthlyObservations, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
+  emptyRange, holdReason, isDuplicate, matchRank, variantWithoutName, monthlyObservations, PLACE_MILEAGE_SHARE, PLACEHOLDER_PRICE_BELOW_EUR, toMarket,
   type CarObservation, type MatchInput, type Period, type PeriodEvidence,
   type Photo, type PriceSnapshot, type RawListing, type SourceAdapter,
   type VehicleWithPrice, type Listing, type Criteria, type Market, type Vehicle,
@@ -51,7 +51,7 @@ const CANDIDATE_COLUMNS = `
 export type FeedRow = ResultRow & { seq: number; first_seen_at: string };
 interface SpanRow extends SqlRow { id: string; from_at: string; to_at: string }
 interface PriceRow extends SqlRow { id: string; at: string; amount: number }
-interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; photos: number }
+interface DetailStateRow extends SqlRow { detail_fetched_at: string | null; photos: number; bare: number; stale: number }
 interface ListingOwnerRow extends SqlRow { vehicle_id: string }
 interface CountRow extends SqlRow { n: number }
 interface IdRow extends SqlRow { id: string }
@@ -247,11 +247,15 @@ export class VehicleRepository {
   needsDetail(vehicleId: string): boolean {
     const row = getRow<DetailStateRow>(this.#db.prepare(`
       SELECT v.detail_fetched_at,
-             (SELECT COUNT(*) FROM photos p WHERE p.vehicle_id = v.id) AS photos
+             (SELECT COUNT(*) FROM photos p WHERE p.vehicle_id = v.id) AS photos,
+             (v.mileage_km IS NULL OR v.first_registration IS NULL) AS bare,
+             (v.detail_fetched_at IS NOT NULL
+              AND v.detail_fetched_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')) AS stale
       FROM vehicles v WHERE v.id = ?
     `), vehicleId);
     if (row === undefined) return false;
-    return row.detail_fetched_at === null || row.photos <= 1;
+    // A bare card is read again, at most once a day: some ads never state a mileage.
+    return row.detail_fetched_at === null || row.photos <= 1 || (row.bare === 1 && row.stale === 1);
   }
 
   /**
@@ -318,9 +322,8 @@ export class VehicleRepository {
     const named = nameWords(raw.title);
     const make = displayName(a.make ?? named[0] ?? "unknown");
     const model = displayName(a.model ?? named.slice(1, 2).join(" ") ?? "unknown");
-    const variant = a.variant === undefined || a.variant === null
-      ? null
-      : displayName(a.variant);
+    const bare = variantWithoutName(a.variant, make, model);
+    const variant = bare === null ? null : displayName(bare);
     const key = identityKey({
       make, model,
       firstRegistration: a.firstRegistration ?? null,
@@ -698,8 +701,18 @@ export class VehicleRepository {
     for (const photo of photos) insert.run(vehicleId, photo.position, photo.url, photo.localPath);
   }
 
+  /**
+   * A longer gallery replaces the stored one, but a picture that is already on
+   * disk keeps its file. Dropping the link left the files orphaned and the car
+   * pointing at a portal URL that is gone once the advert ends.
+   */
   #replacePhotos(vehicleId: string, urls: readonly string[]): void {
-    this.savePhotos(vehicleId, urls.map((url, position) => ({ url, localPath: null, position })));
+    const local = new Map(
+      allRows<PhotoRow>(this.#db.prepare("SELECT * FROM photos WHERE vehicle_id = ?"), vehicleId)
+        .filter((p) => p.local_path !== null)
+        .map((p) => [p.url, p.local_path] as const),
+    );
+    this.savePhotos(vehicleId, urls.map((url, position) => ({ url, localPath: local.get(url) ?? null, position })));
   }
 
   /**
@@ -806,7 +819,7 @@ export class VehicleRepository {
     `).run(
       now, a.firstListedAt ?? null,
       better, a.firstRegistration ?? null,
-      a.variant === undefined || a.variant === null ? null : displayName(a.variant),
+      this.#cleanVariant(a.variant, current),
       a.bodyStyle ?? null, a.mileageKm ?? null, a.powerW ?? null,
       a.fuel ?? null, a.gearbox ?? null, a.sellerType ?? null, a.sellerName ?? null,
       a.postalCode ?? null, a.city ?? null,
@@ -819,6 +832,11 @@ export class VehicleRepository {
     if (raw.photoUrls.length > this.#photoCount(current.id)) {
       this.#replacePhotos(current.id, raw.photoUrls);
     }
+  }
+
+  #cleanVariant(variant: string | null | undefined, car: VehicleRow): string | null {
+    const bare = variantWithoutName(variant, car.make, car.model);
+    return bare === null ? null : displayName(bare);
   }
 
   #photoCount(vehicleId: string): number {

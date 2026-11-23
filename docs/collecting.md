@@ -271,6 +271,11 @@ started while a full `COLLECT_TIMEOUT_MS` of the budget is left; the rest keep
 `detail_fetched_at` unset for the next run, and the source says how many it
 deferred.
 
+A car is read again when it has at most a cover photo, and when it still lacks a
+mileage or a registration a day after its last detail read (some adverts never
+state one, so not at every run). A longer gallery keeps the pictures already on
+disk; replacing the rows used to drop the link and leave the files orphaned.
+
 Every built-in adapter implements `parseDetail`, but each fetches only what its
 list page truly cannot answer:
 

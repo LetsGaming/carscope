@@ -257,6 +257,29 @@ function compatibleRegistration(a: string | null, b: string | null): boolean {
   return a.startsWith(b) || b.startsWith(a);
 }
 
+/**
+ * A variant that repeats the car's own name ("Nissan Skyline R34 GTT" on a Nissan
+ * Skyline) shows the name twice wherever make, model and variant are joined.
+ * What is left after the name is the variant.
+ */
+export function variantWithoutName(
+  variant: string | null | undefined,
+  make: string,
+  model: string,
+): string | null {
+  let words = (variant ?? "").trim().split(/\s+/).filter(Boolean);
+  const strip = (name: string): void => {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    const leads = parts.length > 0
+      && parts.every((part, i) => words[i] !== undefined && normaliseName(words[i] ?? "") === normaliseName(part));
+    if (leads) words = words.slice(parts.length);
+  };
+  strip(`${make} ${model}`);
+  strip(model);
+  strip(make);
+  return words.length === 0 ? null : words.join(" ");
+}
+
 /** Share of the shorter title's words that also appear in the longer one. */
 export function titleOverlap(a: string, b: string): number {
   const words = (v: string): Set<string> =>
