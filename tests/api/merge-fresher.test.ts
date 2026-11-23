@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import type { RawListing, SourceAdapter } from "@carscope/core";
+import { EMPTY_CRITERIA, type RawListing, type SourceAdapter } from "@carscope/core";
 import { openDatabase } from "../../apps/api/src/db/index.ts";
 import { VehicleRepository } from "../../apps/api/src/repositories/vehicles.ts";
 
@@ -82,4 +82,54 @@ test("two prices seen at the same instant both survive a merge", (t) => {
   const prices = vehicles.priceHistory(older).map((p) => p.baseAmount);
   assert.ok(prices.includes(26_990) && prices.includes(24_490), prices.join(","));
   assert.equal(prices.at(-1), 24_490, "the latest price is the live advert's");
+});
+
+test("a card without a price never becomes the price of a car that has one", (t) => {
+  const vehicles = repo(t);
+  const { older } = twoAdverts(vehicles);
+
+  // The same car turns up as a Kleinanzeigen card that says only "VB": price 0.
+  vehicles.recordPrice({
+    vehicleId: older, observedAt: "2026-10-02T12:00:00.000Z", sourceId: "kleinanzeigen",
+    amount: 0, currency: "EUR", baseAmount: 0, rate: 1,
+  });
+
+  assert.deepEqual(vehicles.priceHistory(older).map((p) => p.baseAmount), [26_990]);
+  assert.ok(
+    vehicles.search({ ...EMPTY_CRITERIA, text: "Nissan Skyline" }, false).some((r) => r.id === older),
+    "still in the list",
+  );
+});
+
+test("a car that has only a placeholder price keeps it, so it can be listed as held", (t) => {
+  const vehicles = repo(t);
+  const raw: RawListing = {
+    sourceListingId: "vb", url: "https://www.kleinanzeigen.de/s-anzeige/vb", title: "Nissan Skyline R34",
+    price: 0, currency: "EUR", photoUrls: [],
+    attributes: { make: "Nissan", model: "Skyline", market: "DE", mileageKm: 83_000, city: "Bad Kreuznach" },
+  };
+  const { vehicle } = vehicles.resolve(raw, adapter("kleinanzeigen"), null, OLD, "DE");
+  vehicles.upsertListing(vehicle.id, raw, adapter("kleinanzeigen"), OLD);
+  vehicles.recordPrice({
+    vehicleId: vehicle.id, observedAt: OLD, sourceId: "kleinanzeigen", amount: 0, currency: "EUR", baseAmount: 0, rate: 1,
+  });
+
+  assert.equal(vehicles.priceHistory(vehicle.id).length, 1);
+  assert.equal(vehicles.search(EMPTY_CRITERIA, true, true).length, 1, "held for a missing price");
+});
+
+test("a merge keeps placeholder prices out of the history when a real price exists", (t) => {
+  const db: DatabaseSync = openDatabase(":memory:");
+  t.after(() => db.close());
+  const vehicles = new VehicleRepository(db);
+  const { older, live } = twoAdverts(vehicles);
+  // A row stored before the rule existed: 0 EUR from a card without a price.
+  db.prepare(`
+    INSERT INTO price_snapshots (vehicle_id, observed_at, source_id, amount, currency, base_amount, rate)
+    VALUES (?, '2026-10-02T13:00:00.000Z', 'kleinanzeigen', 0, 'EUR', 0, 1)
+  `).run(live);
+
+  vehicles.mergeInto(older, live);
+
+  assert.ok(vehicles.priceHistory(older).every((p) => p.baseAmount >= 100));
 });

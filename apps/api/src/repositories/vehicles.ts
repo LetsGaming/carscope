@@ -422,6 +422,12 @@ export class VehicleRepository {
    * rows, not five hundred, and the history chart still reaches the last sighting.
    */
   recordPrice(s: PriceSnapshot): void {
+    // A card that states no price arrives as 0. It must not become the latest price
+    // of a car another advert already prices: the car would drop out of the lists.
+    if (s.baseAmount < PLACEHOLDER_PRICE_BELOW_EUR && this.#hasRealPrice(s.vehicleId)) {
+      this.#reassess(s.vehicleId);
+      return;
+    }
     const [latest, before] = allRows<SnapshotRow>(this.#db.prepare(
       "SELECT * FROM price_snapshots WHERE vehicle_id = ? AND source_id = ? ORDER BY observed_at DESC LIMIT 2",
     ), s.vehicleId, s.sourceId);
@@ -614,10 +620,20 @@ export class VehicleRepository {
    * fresher, before it otherwise, so the latest price stays the fresher advert's.
    */
   #moveSnapshots(keepId: string, dropId: string, dropFresher: boolean): void {
-    const rows = allRows<SnapshotRow>(this.#db.prepare(
+    const moved = allRows<SnapshotRow>(this.#db.prepare(
       "SELECT * FROM price_snapshots WHERE vehicle_id = ? ORDER BY observed_at",
     ), dropId);
+    // Placeholder prices (0 for a card without a price) stay behind when any real price exists.
+    const real = this.#hasRealPrice(keepId) || moved.some((r) => r.base_amount >= PLACEHOLDER_PRICE_BELOW_EUR);
+    const rows = real ? moved.filter((r) => r.base_amount >= PLACEHOLDER_PRICE_BELOW_EUR) : moved;
     this.#placeSnapshots(keepId, rows, dropFresher ? 1 : -1);
+  }
+
+  #hasRealPrice(vehicleId: string): boolean {
+    const row = getRow<CountRow>(this.#db.prepare(
+      "SELECT COUNT(*) AS n FROM price_snapshots WHERE vehicle_id = ? AND base_amount >= ?",
+    ), vehicleId, PLACEHOLDER_PRICE_BELOW_EUR);
+    return (row?.n ?? 0) > 0;
   }
 
   #placeSnapshots(targetId: string, rows: readonly SnapshotRow[], step: 1 | -1): void {
